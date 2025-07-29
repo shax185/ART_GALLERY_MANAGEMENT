@@ -1,53 +1,18 @@
-INSERT INTO Gallery (Gallery_Name) VALUES 
-('Modern Art House'), 
-('The Classic Vault');
-INSERT INTO Sections (Section_Name, Gallery_id) VALUES 
-('Impressionism', 1),
-('Abstract Expressionism', 1),
-('Renaissance', 2),
-('Baroque', 2);
-INSERT INTO Author (Name, Age, place_of_birth, birthdate, biography) VALUES
-('Claude Monet', 86, 'Paris', '1840-11-14', 'Founder of French Impressionist painting.'),
-('Pablo Picasso', 91, 'Malaga', '1881-10-25', 'Known for co-founding the Cubist movement.'),
-('Leonardo da Vinci', 67, 'Vinci', '1452-04-15', 'Italian polymath of Renaissance era.');
-INSERT INTO Medium (Medium_Name) VALUES
-('Oil on Canvas'), 
-('Watercolor'), 
-('Tempera'), 
-('Mixed Media');
-INSERT INTO Styles (Style_Name) VALUES
-('Impressionism'), 
-('Cubism'), 
-('High Renaissance'), 
-('Baroque');
-INSERT INTO Manager (Name_of_Manager, Age, POB, Contact, Time_Shift) VALUES
-('Emily Carter', 35, 'New York', 'emily@example.com', '09:00'),
-('Rahul Mehta', 40, 'Delhi', 'rahul@example.com', '13:00');
-INSERT INTO Visitor (Name, Age, Location) VALUES
-('Ananya Sharma', 28, 'Mumbai'),
-('John Smith', 32, 'London'),
-('Taro Yamada', 45, 'Tokyo');
-INSERT INTO Payment_Method (Method_Name) VALUES 
-('Credit Card'), 
-('Bank Transfer'), 
-('Cash');
-INSERT INTO Transaction_Type (Type_Name) VALUES 
-('Sold'), 
-('On Loan');
-INSERT INTO Painting (Title, Author_id, Origin, Price, Section_id, Medium_id, Date_Added, Status) VALUES
-('Water Lilies', 1, 'France', 1000000, 1, 1, '2020-01-01', 'Available'),
-('Guernica', 2, 'Spain', 1500000, 2, 4, '2020-02-01', 'Available'),
-('Mona Lisa', 3, 'Italy', 7000000, 3, 3, '2020-03-01', 'On Loan');
-INSERT INTO Painting_Style (Painting_id, Style_id) VALUES
-(1, 1), -- Water Lilies -> Impressionism
-(2, 2), -- Guernica -> Cubism
-(3, 3); -- Mona Lisa -> High Renaissance
-INSERT INTO Manager_Section_Assignment (Manager_id, Section_id, Assigned_From, Assigned_To) VALUES
-(1, 1, '2023-01-01', '2025-12-31'), -- Emily -> Impressionism
-(2, 3, '2023-01-01', '2025-12-31'); -- Rahul -> Renaissance
-INSERT INTO DAILY_LOGS (Visit_Date, Time_in, Time_out, Visitor_id, Manager_Assigned, Painting_Visited) VALUES
-('2025-07-20', '10:00', '10:30', 1, 1, 1), -- Ananya visits Water Lilies with Emily
-('2025-07-21', '11:00', '11:45', 2, 2, 3); -- John visits Mona Lisa with Rahul
-INSERT INTO Transactions (painting_id, buyer_name, sale_date, amount, payment_method_id, transaction_type_id) VALUES
-(1, 'Ananya Sharma', '2025-07-22', 1000000, 1, 1), -- Painting Sold
-(3, 'Tokyo Museum', '2025-07-15', 0, 2, 2); -- Painting On Loan
+Project Overview: Art Gallery Management System
+Purpose of the Project
+To design and implement a relational database system that efficiently manages the operations of an art gallery, including paintings, artists, sections, visitors, and transactions.
+
+Scope of the System
+
+Manage paintings with details like medium, style, price, and status.
+Track authors, their biographies, and origins.
+Organize paintings into sections within galleries, each managed by assigned staff.
+Record visitor logs and daily activities.
+Handle transactions for sales and loans, including payment methods and types.
+Automate updates and validations using stored procedures and triggers.
+Key Features
+
+Normalized schema with 14+ interrelated tables.
+Business logic encapsulated in procedures and triggers.
+Use of materialized views and indexes for optimized reporting.
+Real-world constraints like loan periods, availability checks, and manager assignments.
