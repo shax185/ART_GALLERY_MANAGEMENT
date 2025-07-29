@@ -1,18 +1,33 @@
-Project Overview: Art Gallery Management System
-Purpose of the Project
-To design and implement a relational database system that efficiently manages the operations of an art gallery, including paintings, artists, sections, visitors, and transactions.
-
-Scope of the System
-
-Manage paintings with details like medium, style, price, and status.
-Track authors, their biographies, and origins.
-Organize paintings into sections within galleries, each managed by assigned staff.
-Record visitor logs and daily activities.
-Handle transactions for sales and loans, including payment methods and types.
-Automate updates and validations using stored procedures and triggers.
-Key Features
-
-Normalized schema with 14+ interrelated tables.
-Business logic encapsulated in procedures and triggers.
-Use of materialized views and indexes for optimized reporting.
-Real-world constraints like loan periods, availability checks, and manager assignments.
+Topics to Cover in Demo
+🔹 Short Topic Explanation
+Introduce the project domain (e.g., Art Gallery or Recipe Management).
+Explain the need for structured data storage, relationships, and automation.
+🔹 ER Diagram Showcase
+Display the ER diagram.
+Highlight how entities like Painting, Author, Transaction, or Recipe, Ingredient, Step are connected.
+🔹 How to Identify in Your Project
+Mapping Tables: Used for many-to-many relationships (e.g., Painting_Style, Recipe_Ingredient).
+Transaction Tables: Capture dynamic events (e.g., Transactions, Recipe_Reviews).
+🔹 Stored Procedures
+Encapsulate logic like updating painting status or recipe ratings.
+Improve maintainability and reusability.
+🔹 Normal CRUD Operations
+Basic INSERT, SELECT, UPDATE, DELETE queries for each table.
+Foundation for interacting with the database.
+🔹 Functions
+Reusable logic blocks used in triggers or queries.
+Example: ValidatePaintingAvailability() or CalculateRecipeCalories().
+🔹 Triggers
+Automate actions like updating status or preventing invalid inserts.
+Example: Auto-update painting status after a sale.
+🔹 Materialized Views
+Precomputed views for reporting (e.g., daily painting status, top-rated recipes).
+Improve performance for complex queries.
+🔹 Indexes
+Speed up queries on frequently filtered or joined columns.
+Example: Index on status_updated_at or recipe_category.
+🚀 If You Want a Scalable DB (Slide: “Scalability Techniques”)
+Sharding: Distribute data across multiple servers to handle large volumes.
+Micro-Databases: Use separate databases for different services/modules.
+Snowflake Schema: Normalize dimension tables for analytical flexibility.
+UUIDs: Use universally unique identifiers for better indexing and distributed consistency.
