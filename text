@@ -1,1 +1,39 @@
+ThisBuild / scalaVersion := "2.12.18"
 
+lazy val root = (project in file("."))
+  .settings(
+    name := "FootballETL",
+    version := "0.1.0",
+    libraryDependencies ++= Seq(
+      "org.apache.spark" %% "spark-core" % "3.5.1",
+      "org.apache.spark" %% "spark-sql"  % "3.5.1",
+      "org.postgresql" % "postgresql" % "42.7.3",
+      "org.slf4j" % "slf4j-simple" % "2.0.13"
+    )
+  )
+
+  
+package util
+
+import org.apache.spark.sql.SparkSession
+
+object SparkSessionBuilder {
+  def getSession(appName: String = "Football ETL"): SparkSession = {
+    SparkSession.builder()
+      .appName(appName)
+      .master("local[*]")
+      .getOrCreate()
+  }
+}
+
+
+
+import util.SparkSessionBuilder
+
+object Main {
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSessionBuilder.getSession()
+    println("✅ Spark Session started successfully!")
+    spark.stop()
+  }
+}
