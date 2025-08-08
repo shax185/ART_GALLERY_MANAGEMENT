@@ -1,27 +1,14 @@
-import pandas as pd
-from sqlalchemy import create_engine
+name := "ETLFootball"
 
-# --- 1. Paths & Connection Details ---
-sqlite_path = "database.sqlite"  # path to your Kaggle SQLite file
-postgres_user = "postgres"
-postgres_password = "your_password"
-postgres_host = "localhost"
-postgres_port = "5432"
-postgres_db = "football_raw"
+version := "0.1"
 
-# --- 2. Connect to SQLite ---
-sqlite_engine = create_engine(f"sqlite:///{sqlite_path}")
+scalaVersion := "2.12.18"
 
-# --- 3. Connect to PostgreSQL ---
-pg_engine = create_engine(f"postgresql+psycopg2://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}")
+libraryDependencies ++= Seq(
+  "org.apache.spark" %% "spark-core" % "3.5.1",
+  "org.apache.spark" %% "spark-sql"  % "3.5.1",
+  "org.postgresql"   %  "postgresql" % "42.7.1"
+)
 
-# --- 4. Get all table names from SQLite ---
-sqlite_tables = sqlite_engine.table_names()
-
-# --- 5. Migrate each table ---
-for table in sqlite_tables:
-    print(f"Transferring {table}...")
-    df = pd.read_sql_table(table, sqlite_engine)
-    df.to_sql(table, pg_engine, if_exists='replace', index=False)
-
-print("✅ Migration completed: All tables moved to PostgreSQL!")
+// run Spark in a forked JVM from sbt/IntelliJ run to avoid classloader conflicts
+ThisBuild / fork := true
