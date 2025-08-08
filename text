@@ -1,47 +1,9 @@
-ThisBuild / scalaVersion := "2.12.18"
-ThisBuild / version := "0.1.0"
-ThisBuild / organization := "com.example"
-
-lazy val root = (project in file("."))
-  .settings(
-    name := "Football-ETL",
-    libraryDependencies ++= Seq(
-      "org.apache.spark" %% "spark-core" % "3.5.1" % Provided,
-      "org.apache.spark" %% "spark-sql" % "3.5.1" % Provided,
-      "org.postgresql" % "postgresql" % "42.7.3",
-      "org.slf4j" % "slf4j-simple" % "2.0.13" % Runtime
-    )
-  )	at org.apache.spark.SparkContext.createSparkEnv(SparkContext.scala:284)
-	at org.apache.spark.SparkContext.<init>(SparkContext.scala:483)
-	at org.apache.spark.SparkContext$.getOrCreate(SparkContext.scala:2888)
-	at org.apache.spark.sql.SparkSession$Builder.$anonfun$getOrCreate$2(SparkSession.scala:1099)
-	at scala.Option.getOrElse(Option.scala:189)
-	at org.apache.spark.sql.SparkSession$Builder.getOrCreate(SparkSession.scala:1093)
-	at Main$.main(Main.scala:7)
+Exception in thread "main" java.lang.NoClassDefFoundError: org/apache/spark/sql/SparkSession$
+	at util.SparkSessionBuilder$.getSession(SparkSessionBuilder.scala:7)
+	at Main$.main(Main.scala:5)
 	at Main.main(Main.scala)
-
-
-package util
-
-import org.apache.spark.sql.SparkSession
-
-object SparkSessionBuilder {
-  def getSession(appName: String = "Football ETL"): SparkSession = {
-    SparkSession.builder()
-      .appName(appName)
-      .master("local[*]")
-      .config("spark.sql.catalogImplementation", "in-memory")
-      .getOrCreate()
-  }
-}
-
-
-import util.SparkSessionBuilder
-
-object Main {
-  def main(args: Array[String]): Unit = {
-    val spark = SparkSessionBuilder.getSession()
-    println(s"Spark version: ${spark.version}")
-    spark.stop()
-  }
-}
+Caused by: java.lang.ClassNotFoundException: org.apache.spark.sql.SparkSession$
+	at java.base/jdk.internal.loader.BuiltinClassLoader.loadClass(BuiltinClassLoader.java:581)
+	at java.base/jdk.internal.loader.ClassLoaders$AppClassLoader.loadClass(ClassLoaders.java:178)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:527)
+	... 3 more
