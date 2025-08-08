@@ -1,1 +1,29 @@
 
+import org.apache.spark.sql.SparkSession
+
+object FootballETL {
+  def main(args: Array[String]): Unit = {
+
+    val spark = SparkSession.builder()
+      .appName("Football ETL")
+      .master("local[*]")
+      .getOrCreate()
+
+    val jdbcUrl = "jdbc:postgresql://localhost:5432/football"
+    val dbUser = "postgres"
+    val dbPassword = "your_password"
+
+    val df = spark.read
+      .format("jdbc")
+      .option("url", jdbcUrl)
+      .option("dbtable", "matches") // change to your table name
+      .option("user", dbUser)
+      .option("password", dbPassword)
+      .option("driver", "org.postgresql.Driver")
+      .load()
+
+    df.show(10, false) // Display first 10 rows
+
+    spark.stop()
+  }
+}
