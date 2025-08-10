@@ -1,7 +1,151 @@
-Country                   Rows: 11         NumericCols: 1     StringCols: 1     Guess: DIMENSION
-League                    Rows: 11         NumericCols: 2     StringCols: 1     Guess: DIMENSION
-Match                     Rows: 25979      NumericCols: 105   StringCols: 10    Guess: FACT
-Player                    Rows: 11060      NumericCols: 5     StringCols: 2     Guess: FACT
-Player_Attributes         Rows: 183978     NumericCols: 38    StringCols: 4     Guess: FACT
-Team                      Rows: 299        NumericCols: 3     StringCols: 2     Guess: DIMENSION
-Team_Attributes           Rows: 1458       NumericCols: 12    StringCols: 13    Guess: DIMENSION
+package etl
+
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.functions._
+import java.sql.DriverManager
+import java.util.Properties
+
+object LeaguePerformanceETL {
+
+  /** Update these before running */
+  val jdbcUrl = "jdbc:postgresql://localhost:5432/football" // your DB
+  val dbUser  = "postgres"
+  val dbPass  = "your_password"
+  val dbDriver = "org.postgresql.Driver"
+  val targetSchema = "football_dw"
+
+  private def ensureSchemaExists(): Unit = {
+    // create schema if not exists using plain JDBC
+    Class.forName(dbDriver)
+    val conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPass)
+    try {
+      val stmt = conn.createStatement()
+      stmt.execute(s"CREATE SCHEMA IF NOT EXISTS $targetSchema;")
+      stmt.close()
+      println(s"✅ Schema '$targetSchema' ensured.")
+    } finally conn.close()
+  }
+
+  private def readTable(spark: SparkSession, tableName: String): DataFrame = {
+    val props = new Properties()
+    props.setProperty("user", dbUser)
+    props.setProperty("password", dbPass)
+    props.setProperty("driver", dbDriver)
+
+    val dbtable = s""""public"."$tableName"""" // keeps case/quotes
+    spark.read.jdbc(jdbcUrl, dbtable, props)
+  }
+
+  private def writeTable(df: DataFrame, fullTableName: String): Unit = {
+    // fullTableName should be like "football_dw.dim_country"
+    val props = new Properties()
+    props.setProperty("user", dbUser)
+    props.setProperty("password", dbPass)
+    props.setProperty("driver", dbDriver)
+
+    df.write
+      .mode("overwrite")
+      .jdbc(jdbcUrl, fullTableName, props)
+    println(s"✅ Written ${df.count()} rows to $fullTableName")
+  }
+
+  def run(spark: SparkSession): Unit = {
+    spark.sparkContext.setLogLevel("WARN")
+    ensureSchemaExists()
+
+    // ===== Extract =====
+    println("🔁 Extracting raw tables from public schema...")
+    val dfCountry = readTable(spark, "Country")
+    val dfLeague  = readTable(spark, "League")
+    val dfTeam    = readTable(spark, "Team")
+    val dfMatch   = readTable(spark, "Match")
+
+    println(s"Country rows: ${dfCountry.count()}, League rows: ${dfLeague.count()}, Team rows: ${dfTeam.count()}, Match rows: ${dfMatch.count()}")
+
+    // ===== Transform =====
+    println("🔧 Transforming into dimension and fact tables...")
+
+    // dim_country
+    val dimCountry = dfCountry
+      .select(col("id").alias("country_id"), col("name").alias("country_name"))
+      .dropDuplicates("country_id")
+
+    // dim_league
+    val dimLeague = dfLeague
+      .select(col("id").alias("league_id"), col("country_id"), col("name").alias("league_name"))
+      .dropDuplicates("league_id")
+
+    // dim_team: use team_api_id as canonical team_id; fallback to id if null
+    val dimTeam = dfTeam
+      .withColumn("team_id",
+        when(col("team_api_id").isNotNull, col("team_api_id"))
+          .otherwise(col("id"))
+      )
+      .select(col("team_id"), col("team_long_name").alias("team_name"))
+      .dropDuplicates("team_id")
+
+    // fact_match: pick essential columns and derive metrics
+    val factMatchBase = dfMatch.select(
+      col("id").alias("match_id"),
+      col("league_id"),
+      col("season"),
+      col("date"),
+      col("home_team_api_id").alias("home_team_id"),
+      col("away_team_api_id").alias("away_team_id"),
+      col("home_team_goal"),
+      col("away_team_goal")
+    )
+
+    val factMatch = factMatchBase
+      .withColumn("home_team_goal", col("home_team_goal").cast("int"))
+      .withColumn("away_team_goal", col("away_team_goal").cast("int"))
+      .withColumn("result",
+        when(col("home_team_goal") > col("away_team_goal"), lit("Home Win"))
+          .when(col("home_team_goal") < col("away_team_goal"), lit("Away Win"))
+          .otherwise(lit("Draw"))
+      )
+      .withColumn("goal_difference", col("home_team_goal") - col("away_team_goal"))
+
+    // Optional: remove matches with null goals (if any)
+    val factMatchClean = factMatch.filter(col("home_team_goal").isNotNull && col("away_team_goal").isNotNull)
+
+    // ===== Load =====
+    println("📥 Loading dimension and fact tables to Postgres DW schema...")
+    writeTable(dimCountry, s"$targetSchema.dim_country")
+    writeTable(dimLeague,  s"$targetSchema.dim_league")
+    writeTable(dimTeam,    s"$targetSchema.dim_team")
+    writeTable(factMatchClean, s"$targetSchema.fact_match")
+
+    // ===== Simple validation =====
+    println("🔍 Validating joins (sample)...")
+    val joined = factMatchClean
+      .join(dimLeague, factMatchClean("league_id") === dimLeague("league_id"), "left")
+      .join(dimTeam.withColumnRenamed("team_id","home_team_id_ref"), factMatchClean("home_team_id") === col("home_team_id_ref"), "left")
+      .join(dimTeam.withColumnRenamed("team_id","away_team_id_ref"), factMatchClean("away_team_id") === col("away_team_id_ref"), "left")
+
+    println(s"Sample joined rows:")
+    joined.select("match_id", "season", "league_name", "home_team_id_ref", "team_name", "away_team_id_ref").show(10, truncate = false)
+
+    println("✅ ETL finished.")
+  }
+}
+
+
+
+package app
+
+import org.apache.spark.sql.SparkSession
+import etl.LeaguePerformanceETL
+
+object Main {
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("League Performance ETL")
+      .master("local[*]")
+      .getOrCreate()
+
+    LeaguePerformanceETL.run(spark)
+
+    spark.stop()
+  }
+}
