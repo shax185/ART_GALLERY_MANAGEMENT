@@ -1,1 +1,57 @@
 
+package profiling
+
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.types._
+
+object TableProfiler {
+
+  def main(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .appName("Postgres Table Profiler")
+      .master("local[*]")
+      .getOrCreate()
+
+    val jdbcUrl = "jdbc:postgresql://localhost:5432/football"
+    val jdbcUser = "postgres"
+    val jdbcPassword = "your_password"
+
+    // Load table list from information_schema
+    val tablesDF = spark.read
+      .format("jdbc")
+      .option("url", jdbcUrl)
+      .option("dbtable",
+        "(SELECT table_name FROM information_schema.tables WHERE table_schema='public') AS tbl")
+      .option("user", jdbcUser)
+      .option("password", jdbcPassword)
+      .option("driver", "org.postgresql.Driver")
+      .load()
+
+    val tableList = tablesDF.collect().map(_.getString(0))
+
+    tableList.foreach { table =>
+      val df = spark.read
+        .format("jdbc")
+        .option("url", jdbcUrl)
+        .option("dbtable", s""""public"."$table"""")
+        .option("user", jdbcUser)
+        .option("password", jdbcPassword)
+        .option("driver", "org.postgresql.Driver")
+        .load()
+
+      val rowCount = df.count()
+      val schema = df.schema
+
+      val numNumeric = schema.count(f => f.dataType.isInstanceOf[NumericType])
+      val numString  = schema.count(f => f.dataType == StringType)
+
+      val guess =
+        if (rowCount > 5000 && numNumeric > numString) "FACT"
+        else "DIMENSION"
+
+      println(f"$table%-25s Rows: $rowCount%-10d NumericCols: $numNumeric%-5d StringCols: $numString%-5d Guess: $guess")
+    }
+
+    spark.stop()
+  }
+}
