@@ -331,3 +331,23 @@ object Main {
     spark.stop()
   }
 }
+
+
+✅ Ensured schema: football_dw
+🔁 Extracting raw tables...
+25/08/10 20:45:46 WARN SparkStringUtils: Truncated the string representation of a plan since it was too large. This behavior can be adjusted by setting 'spark.sql.debug.maxToStringFields'.
+Extracted rows -> Country: 11, League: 11, Team: 299, Match: 25979
+🔍 Running data quality checks on matches...
+✅ Wrote 11 rows to football_dw.dim_country
+✅ Wrote 11 rows to football_dw.dim_league
+✅ Wrote 299 rows to football_dw.dim_team
+✅ Wrote 25979 rows to football_dw.fact_match
+✅ Wrote 1481 rows to football_dw.fact_team_season
+✅ Wrote 88 rows to football_dw.fact_league_season
+✅ Wrote 51958 rows to football_dw.fact_team_form
+✅ Wrote 3510 rows to football_dw.fact_head_to_head
+✅ Wrote 73059 rows to football_dw.dim_player_year_snapshot
+🔍 Running post-load validations...
+Post-load counts: fact_match=25979, fact_team_season=1481
+✅ Created indexes on DW tables
+✅ Full ETL finished successfully.
