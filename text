@@ -1,29 +1,57 @@
-
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{DataFrame, SparkSession}
 
 object FootballETL {
+
   def main(args: Array[String]): Unit = {
 
     val spark = SparkSession.builder()
-      .appName("Football ETL")
+      .appName("Football ETL - Ingestion")
       .master("local[*]")
       .getOrCreate()
 
-    val jdbcUrl = "jdbc:postgresql://localhost:5432/football"
-    val dbUser = "postgres"
+    spark.sparkContext.setLogLevel("WARN")
+
+    // Database connection
+    val jdbcUrl = "jdbc:postgresql://localhost:5432/football_db"
+    val dbUser = "your_user"
     val dbPassword = "your_password"
+    val dbDriver = "org.postgresql.Driver"
 
-    val df = spark.read
-      .format("jdbc")
-      .option("url", jdbcUrl)
-      .option("dbtable", "matches") // change to your table name
-      .option("user", dbUser)
-      .option("password", dbPassword)
-      .option("driver", "org.postgresql.Driver")
-      .load()
+    // Tables to ingest
+    val tables = Seq(
+      "\"public\".\"Country\"",
+      "\"public\".\"League\"",
+      "\"public\".\"Team\"",
+      "\"public\".\"Player\"",
+      "\"public\".\"Match\"",
+      "\"public\".\"Player_Attributes\"",
+      "\"public\".\"Team_Attributes\""
+    )
 
-    df.show(10, false) // Display first 10 rows
+    // Function to load tables
+    def loadTable(tableName: String): DataFrame = {
+      spark.read
+        .format("jdbc")
+        .option("url", jdbcUrl)
+        .option("dbtable", tableName)
+        .option("user", dbUser)
+        .option("password", dbPassword)
+        .option("driver", dbDriver)
+        .load()
+    }
+
+    // Load and show first few rows
+    tables.foreach { table =>
+      val df = loadTable(table)
+      val cleanName = table.replace("\"public\".", "").replace("\"", "")
+      println(s"===== Preview: $cleanName =====")
+      df.show(5, truncate = false)
+    }
 
     spark.stop()
   }
 }
+
+
+val countryDF = dataFrames("Country")
+val playerDF = dataFrames("Player")
