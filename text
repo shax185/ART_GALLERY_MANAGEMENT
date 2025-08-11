@@ -397,3 +397,44 @@ object FullLeagueETL {
     println("✅ Full ETL finished successfully.")
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+// Use pushdown for League so we only read relevant leagues
+val leagueNamesEscaped = relevantLeagues
+  .map(name => s"'${name.replace("'", "''")}'")
+  .mkString(",")
+
+// Important: wrap SQL in parentheses and alias it for JDBC
+val leagueQuery = s"(SELECT id, country_id, name FROM public.\"League\" WHERE name IN ($leagueNamesEscaped)) AS t_league"
+
+// Load tables
+val tCountry = readTable(spark, "Country")
+val tLeague = readTable(spark, leagueQuery).persist()
+val tTeam = readTable(spark, "Team")
+val tMatch = readTable(spark, "Match")
+val tPlayer = try { readTable(spark, "Player") } catch { case _: Throwable => spark.emptyDataFrame }
+val tPlayerAttr = try { readTable(spark, "Player_Attributes") } catch { case _: Throwable => spark.emptyDataFrame }
+val tTeamAttr = try { readTable(spark, "Team_Attributes") } catch { case _: Throwable => spark.emptyDataFrame }
+
+// Avoid heavy full counts; just sample existence + small counts for logging
+println(s"Extracted tables (sample): League rows=${tLeague.limit(5).count()}, Match cols=${tMatch.columns.length}, Team cols=${tTeam.columns.length}")
+
+// === DIMENSION FILTERING ===
+val dimLeagueFiltered = tLeague
+  .select(
+    col("id").cast(IntegerType).alias("league_id"),
+    col("country_id").cast(IntegerType),
+    trim(col("name")).alias("league_name")
+  )
+  .na.drop(Seq("league_id"))
+  .dropDuplicates("league_id")
+  .persist()
