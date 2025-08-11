@@ -1,24 +1,69 @@
+-- Count matches in source for relevant leagues
+SELECT COUNT(*) AS source_match_count
+FROM public.Match m
+JOIN public.League l ON m.league_id = l.id
+WHERE l.name IN ('England Premier League', 'France Ligue 1', 'Germany 1. Bundesliga', 'Italy Serie A', 'Spain LIGA BBVA');
+
+-- Count matches in DW fact_match
+SELECT COUNT(*) AS dw_match_count
+FROM football_dw2.fact_match;
+
+SELECT COUNT(*) AS null_goals_or_dates
+FROM football_dw2.fact_match
+WHERE home_team_goal IS NULL OR away_team_goal IS NULL OR match_date IS NULL;
+
+SELECT match_id, home_team_goal, away_team_goal, result, points, goal_difference, season
+FROM football_dw2.fact_match
+WHERE match_id IN (12345, 67890);  -- replace with actual IDs
+
 SELECT match_id, home_team_goal, away_team_goal, result,
   CASE 
     WHEN home_team_goal > away_team_goal THEN 'Home Win'
     WHEN home_team_goal < away_team_goal THEN 'Away Win'
-    ELSE 'Draw' END AS expected_result
+    ELSE 'Draw' 
+  END AS expected_result
 FROM football_dw2.fact_match
-WHERE result !=
+WHERE result != 
   CASE 
     WHEN home_team_goal > away_team_goal THEN 'Home Win'
     WHEN home_team_goal < away_team_goal THEN 'Away Win'
-    ELSE 'Draw' END;
+    ELSE 'Draw' 
+  END;
 
-
-    SELECT team_id, season, SUM(goals_for) as total_goals
+SELECT team_id, season, goals_for, goals_against, points, matches_played
 FROM football_dw2.fact_team_season
-GROUP BY team_id, season
-ORDER BY total_goals DESC
+ORDER BY season DESC, points DESC
 LIMIT 10;
 
+-- Sum goals from fact_match for home teams
+SELECT home_team_id AS team_id, season, SUM(home_team_goal) AS total_home_goals
+FROM football_dw2.fact_match
+GROUP BY home_team_id, season
+ORDER BY season DESC
+LIMIT 10;
 
+-- Sum goals from fact_match for away teams
+SELECT away_team_id AS team_id, season, SUM(away_team_goal) AS total_away_goals
+FROM football_dw2.fact_match
+GROUP BY away_team_id, season
+ORDER BY season DESC
+LIMIT 10;
 
-SELECT DISTINCT league_id FROM football_dw2.fact_match
+SELECT DISTINCT league_id
+FROM football_dw2.fact_match
 EXCEPT
 SELECT league_id FROM football_dw2.dim_league;
+
+SELECT COUNT(*) AS negative_goals
+FROM football_dw2.fact_match
+WHERE home_team_goal < 0 OR away_team_goal < 0;
+
+SELECT match_id, COUNT(*) AS dup_count
+FROM football_dw2.fact_match
+GROUP BY match_id
+HAVING COUNT(*) > 1;
+
+SELECT league_id, season, COUNT(*) AS total_matches
+FROM football_dw2.fact_match
+GROUP BY league_id, season
+ORDER BY league_id, season;
