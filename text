@@ -4,14 +4,13 @@ import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.expressions.Window
-
 import java.sql.DriverManager
 import java.util.Properties
 
 object FullLeagueETL {
 
-  // ---------- CONFIG - update these ----------
-  val jdbcUrl = "jdbc:postgresql://localhost:5432/football" // postgres DB that holds raw public.* tables
+  // ---------- CONFIG ----------
+  val jdbcUrl = "jdbc:postgresql://localhost:5432/football"
   val dbUser  = "postgres"
   val dbPass  = "your_password"
   val dbDriver = "org.postgresql.Driver"
@@ -25,7 +24,7 @@ object FullLeagueETL {
     "Italy Serie A",
     "Spain LIGA BBVA"
   )
-  // -------------------------------------------
+  // ----------------------------
 
   private def ensureSchemaExists(): Unit = {
     Class.forName(dbDriver)
@@ -117,16 +116,6 @@ object FullLeagueETL {
       .na.drop(Seq("country_id"))
       .dropDuplicates("country_id")
 
-    val dimTeam = tTeam
-      .withColumn("team_id", when(col("team_api_id").isNotNull, col("team_api_id")).otherwise(col("id")))
-      .select(
-        col("team_id").cast(IntegerType),
-        trim(col("team_long_name")).alias("team_name"),
-        trim(col("team_short_name")).alias("team_short_name")
-      )
-      .na.drop(Seq("team_id"))
-      .dropDuplicates("team_id")
-
     // === FACT MATCH CLEAN + ENRICH ===
     val matchCols = Seq(
       "id", "country_id", "league_id", "season", "stage", "date",
@@ -148,18 +137,16 @@ object FullLeagueETL {
       .withColumn("away_team_goal", col("away_team_goal").cast(IntegerType))
       .select("match_id", "league_id", "country_id", "season", "date", "home_team_id", "away_team_id", "home_team_goal", "away_team_goal")
 
-    // Filter to only relevant leagues & countries
+    // Filter matches to relevant leagues & countries
     val factMatchFiltered = factMatchTyped
       .join(dimLeagueFiltered.select("league_id"), Seq("league_id"), "inner")
       .join(dimCountryFiltered.select("country_id"), Seq("country_id"), "inner")
 
-    // Data quality checks
     val factMatchClean = factMatchFiltered
       .filter(col("home_team_goal").isNotNull && col("away_team_goal").isNotNull && col("date").isNotNull)
       .filter(col("home_team_goal") >= 0 && col("away_team_goal") >= 0)
       .dropDuplicates("match_id")
 
-    // Enrich fact_match with result, points, goal_difference, season_year, match_week
     val factMatchEnriched = factMatchClean
       .withColumn("result",
         when(col("home_team_goal") > col("away_team_goal"), lit("Home Win"))
@@ -177,11 +164,26 @@ object FullLeagueETL {
           .when(col("away_team_goal") === col("home_team_goal"), lit(1))
           .otherwise(lit(0))
       )
-      .withColumn("season_start_year",
-        regexp_extract(col("season"), """(\d{4})""", 1).cast(IntegerType)
-      )
+      .withColumn("season_start_year", regexp_extract(col("season"), """(\d{4})""", 1).cast(IntegerType))
       .withColumn("match_week", weekofyear(col("date")))
       .withColumn("match_date", to_date(col("date")))
+
+    // === RELEVANT TEAMS (for filtering dim_team and players) ===
+    val relevantTeamIds = factMatchEnriched
+      .select("home_team_id").withColumnRenamed("home_team_id", "team_id")
+      .union(factMatchEnriched.select(col("away_team_id").alias("team_id")))
+      .distinct()
+
+    val dimTeam = tTeam
+      .withColumn("team_id", when(col("team_api_id").isNotNull, col("team_api_id")).otherwise(col("id")))
+      .select(
+        col("team_id").cast(IntegerType),
+        trim(col("team_long_name")).alias("team_name"),
+        trim(col("team_short_name")).alias("team_short_name")
+      )
+      .na.drop(Seq("team_id"))
+      .dropDuplicates("team_id")
+      .join(relevantTeamIds, Seq("team_id"), "inner")
 
     // === WRITE DIMENSIONS ===
     writeTable(dimCountryFiltered, s"$targetSchema.dim_country")
@@ -191,26 +193,16 @@ object FullLeagueETL {
 
     // === TEAM-SEASON AGGREGATES ===
     val homePerspective = factMatchEnriched.select(
-      col("match_id"),
-      col("season"),
-      col("league_id"),
-      col("match_date"),
-      col("home_team_id").alias("team_id"),
-      col("away_team_id").alias("opponent_team_id"),
-      col("home_team_goal").alias("goals_for"),
-      col("away_team_goal").alias("goals_against"),
+      col("match_id"), col("season"), col("league_id"), col("match_date"),
+      col("home_team_id").alias("team_id"), col("away_team_id").alias("opponent_team_id"),
+      col("home_team_goal").alias("goals_for"), col("away_team_goal").alias("goals_against"),
       col("home_points").alias("points")
     ).withColumn("is_home", lit(true))
 
     val awayPerspective = factMatchEnriched.select(
-      col("match_id"),
-      col("season"),
-      col("league_id"),
-      col("match_date"),
-      col("away_team_id").alias("team_id"),
-      col("home_team_id").alias("opponent_team_id"),
-      col("away_team_goal").alias("goals_for"),
-      col("home_team_goal").alias("goals_against"),
+      col("match_id"), col("season"), col("league_id"), col("match_date"),
+      col("away_team_id").alias("team_id"), col("home_team_id").alias("opponent_team_id"),
+      col("away_team_goal").alias("goals_for"), col("home_team_goal").alias("goals_against"),
       col("away_points").alias("points")
     ).withColumn("is_home", lit(false))
 
@@ -243,7 +235,7 @@ object FullLeagueETL {
 
     writeTable(factLeagueSeason, s"$targetSchema.fact_league_season")
 
-    // === ROLLING TEAM FORM (Last N matches) ===
+    // === ROLLING TEAM FORM ===
     val w = Window.partitionBy("team_id").orderBy(col("match_date").cast("timestamp")).rowsBetween(-keepLastNForForm, -1)
     val teamForm = teamMatchPerspective
       .withColumn("rolling_goals_for_lastN", sum("goals_for").over(w))
@@ -276,11 +268,18 @@ object FullLeagueETL {
 
     writeTable(headToHead, s"$targetSchema.fact_head_to_head")
 
-    // === PLAYER SEASON SNAPSHOT ===
+    // === PLAYER SEASON SNAPSHOT (only relevant players) ===
     if (!tPlayerAttr.rdd.isEmpty()) {
+      val relevantPlayers = tPlayer
+        .select(col("player_api_id"), col("player_name"))
+        .join(relevantTeamIds, tPlayer("player_api_id") === relevantTeamIds("team_id"), "inner") // change this join logic if player-team link table exists
+        .select("player_api_id")
+        .distinct()
+
       val playerAttr = tPlayerAttr
         .withColumn("date", to_date(col("date")))
         .withColumn("year", year(col("date")))
+        .join(relevantPlayers, Seq("player_api_id"), "inner")
 
       val win = Window.partitionBy("player_api_id", "year").orderBy(col("date").desc)
       val playerYearSnapshot = playerAttr.withColumn("rn", row_number().over(win)).filter(col("rn") === 1).drop("rn")
@@ -296,7 +295,7 @@ object FullLeagueETL {
       )
     }
 
-    // === POST-LOAD VALIDATIONS ===
+    // === VALIDATIONS ===
     println("🔍 Running post-load validations...")
     val cntFact = spark.read.jdbc(jdbcUrl, s""""$targetSchema"."fact_match"""", jdbcProps).count()
     val cntTeamSeason = spark.read.jdbc(jdbcUrl, s""""$targetSchema"."fact_team_season"""", jdbcProps).count()
@@ -318,9 +317,7 @@ object FullLeagueETL {
       println("✅ No duplicate match_ids found.")
     }
 
-    // === CREATE INDEXES ===
     createIndexes()
-
     println("✅ Full ETL finished successfully.")
   }
 }
