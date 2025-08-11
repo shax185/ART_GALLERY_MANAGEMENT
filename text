@@ -16,14 +16,7 @@ object FullLeagueETL1 {
   val dbDriver = "org.postgresql.Driver"
   val targetSchema = "football_dw1"
   val keepLastNForForm = 5 // rolling form window
-
-  val relevantLeagues = Set(
-    "England Premier League",
-    "France Ligue 1",
-    "Germany 1. Bundesliga",
-    "Italy Serie A",
-    "Spain LIGA BBVA"
-  )
+  val minRivalryMeetings = 10
   // ----------------------------
 
   private def ensureSchemaExists(): Unit = {
@@ -95,6 +88,14 @@ object FullLeagueETL1 {
     println(s"Extracted rows -> Country: ${tCountry.count()}, League: ${tLeague.count()}, Team: ${tTeam.count()}, Match: ${tMatch.count()}")
 
     // === DIMENSION FILTERING ===
+    val relevantLeagues = Set(
+      "England Premier League",
+      "France Ligue 1",
+      "Germany 1. Bundesliga",
+      "Italy Serie A",
+      "Spain LIGA BBVA"
+    )
+
     val dimLeagueFiltered = tLeague
       .select(
         col("id").cast(IntegerType).alias("league_id"),
@@ -208,6 +209,7 @@ object FullLeagueETL1 {
 
     val teamMatchPerspective = homePerspective.unionByName(awayPerspective)
       .filter(col("team_id").isNotNull)
+      .persist()
 
     val factTeamSeason = teamMatchPerspective.groupBy("season", "league_id", "team_id")
       .agg(
@@ -221,6 +223,7 @@ object FullLeagueETL1 {
         sum("points").alias("points"),
         round(sum("points") / countDistinct("match_id"), 3).alias("win_rate")
       )
+      .persist()
 
     writeTable(factTeamSeason, s"$targetSchema.fact_team_season")
 
@@ -247,6 +250,24 @@ object FullLeagueETL1 {
 
     writeTable(teamForm, s"$targetSchema.fact_team_form")
 
+    // === TEAM PROGRESS (cumulative points over season timeline) ===
+    val progressWindow = Window.partitionBy("season", "team_id").orderBy("match_date").rowsBetween(Window.unboundedPreceding, Window.currentRow)
+    val teamProgress = teamMatchPerspective
+      .withColumn("cumulative_points", sum("points").over(progressWindow))
+      .select("season", "league_id", "team_id", "match_date", "cumulative_points")
+      .persist()
+
+    writeTable(teamProgress, s"$targetSchema.fact_team_progress")
+
+    // === LEAGUE STANDINGS (ranked) ===
+    val standingsWindow = Window.partitionBy("season", "league_id").orderBy(col("points").desc, col("goal_difference").desc)
+    val leagueStandings = factTeamSeason
+      .withColumn("rank", row_number().over(standingsWindow))
+      .select("season", "league_id", "team_id", "matches_played", "wins", "draws", "losses", "goals_for", "goals_against", "goal_difference", "points", "win_rate", "rank")
+      .persist()
+
+    writeTable(leagueStandings, s"$targetSchema.fact_league_standings")
+
     // === HEAD-TO-HEAD AGGREGATES ===
     val pairDf = factMatchEnriched.select("match_id", "match_date", "home_team_id", "away_team_id", "home_team_goal", "away_team_goal")
       .withColumn("team_a", least(col("home_team_id"), col("away_team_id")))
@@ -265,59 +286,136 @@ object FullLeagueETL1 {
         round(sum(when(col("a_goals") > col("b_goals"), 1).otherwise(0)) / count("match_id"), 3).alias("a_win_rate"),
         round(sum(when(col("a_goals") < col("b_goals"), 1).otherwise(0)) / count("match_id"), 3).alias("b_win_rate")
       )
+      .persist()
 
     writeTable(headToHead, s"$targetSchema.fact_head_to_head")
 
-    // === PLAYER SEASON SNAPSHOT (only relevant players) ===
-    if (!tPlayerAttr.rdd.isEmpty()) {
-      val relevantPlayers = tPlayer
-        .select(col("player_api_id"), col("player_name"))
-        .join(relevantTeamIds, tPlayer("player_api_id") === relevantTeamIds("team_id"), "inner") // change this join logic if player-team link table exists
-        .select("player_api_id")
-        .distinct()
+    // === RIVALRIES (filter headToHead by meetings threshold) ===
+    val rivalries = headToHead.filter(col("meetings") >= minRivalryMeetings)
+    writeTable(rivalries, s"$targetSchema.fact_rivalries")
 
-      val playerAttr = tPlayerAttr
-        .withColumn("date", to_date(col("date")))
-        .withColumn("year", year(col("date")))
-        .join(relevantPlayers, Seq("player_api_id"), "inner")
+    // === HIGH SCORING MATCHES ===
+    val highScoringMatches = factMatchEnriched
+      .withColumn("total_goals", col("home_team_goal") + col("away_team_goal"))
+      .select("match_id", "season", "league_id", "match_date", "home_team_id", "away_team_id", "home_team_goal", "away_team_goal", "total_goals")
+      .orderBy(col("total_goals").desc)
+      .persist()
 
-      val win = Window.partitionBy("player_api_id", "year").orderBy(col("date").desc)
-      val playerYearSnapshot = playerAttr.withColumn("rn", row_number().over(win)).filter(col("rn") === 1).drop("rn")
+    writeTable(highScoringMatches, s"$targetSchema.fact_high_scoring_matches")
 
-      writeTable(
-        playerYearSnapshot.select(
-          col("player_api_id"),
-          col("year"),
-          col("overall_rating"),
-          col("potential")
-        ),
-        s"$targetSchema.dim_player_year_snapshot"
+    // === GOAL DISTRIBUTION (season + league level aggregates suitable for viz) ===
+    val goalDistribution = factMatchEnriched
+      .withColumn("total_goals", col("home_team_goal") + col("away_team_goal"))
+      .groupBy("season", "league_id")
+      .agg(
+        round(avg("total_goals"), 3).alias("avg_total_goals"),
+        expr("percentile_approx(total_goals, 0.5)").alias("median_total_goals"),
+        min("total_goals").alias("min_total_goals"),
+        max("total_goals").alias("max_total_goals"),
+        count("*").alias("matches_count")
       )
+
+    writeTable(goalDistribution, s"$targetSchema.fact_goal_distribution")
+
+    // === TEAM-LEVEL: MOST GOALS (overall & per season) ===
+    val teamGoalsOverall = teamMatchPerspective.groupBy("team_id")
+      .agg(sum("goals_for").alias("total_goals"))
+      .join(dimTeam.select("team_id", "team_name"), Seq("team_id"), "left")
+      .select("team_id", "team_name", "total_goals")
+      .orderBy(desc("total_goals"))
+
+    writeTable(teamGoalsOverall, s"$targetSchema.fact_team_goals_overall")
+
+    val teamGoalsBySeason = teamMatchPerspective.groupBy("season", "team_id")
+      .agg(sum("goals_for").alias("season_goals"))
+      .join(dimTeam.select("team_id", "team_name"), Seq("team_id"), "left")
+      .select("season", "team_id", "team_name", "season_goals")
+      .orderBy("season", desc("season_goals"))
+
+    writeTable(teamGoalsBySeason, s"$targetSchema.fact_team_goals_by_season")
+
+    // === TEAM-LEVEL: MOST WINS (overall & per season) ===
+    val teamWinsOverall = teamMatchPerspective.filter(col("points") === 3)
+      .groupBy("team_id")
+      .agg(count("*").alias("wins"))
+      .join(dimTeam.select("team_id", "team_name"), Seq("team_id"), "left")
+      .select("team_id", "team_name", "wins")
+      .orderBy(desc("wins"))
+
+    writeTable(teamWinsOverall, s"$targetSchema.fact_team_wins_overall")
+
+    val teamWinsBySeason = teamMatchPerspective.filter(col("points") === 3)
+      .groupBy("season", "team_id")
+      .agg(count("*").alias("season_wins"))
+      .join(dimTeam.select("team_id", "team_name"), Seq("team_id"), "left")
+      .select("season", "team_id", "team_name", "season_wins")
+      .orderBy("season", desc("season_wins"))
+
+    writeTable(teamWinsBySeason, s"$targetSchema.fact_team_wins_by_season")
+
+    // === TEAM-LEVEL: LONGEST WIN STREAK ===
+    val winFlag = teamMatchPerspective.withColumn("is_win", when(col("points") === 3, 1).otherwise(0))
+    val winGrpWindow = Window.partitionBy("team_id").orderBy(col("match_date").cast("timestamp"))
+    val winStreakId = sum(when(col("is_win") === 0, 1).otherwise(0)).over(winGrpWindow)
+    val winStreaks = winFlag.withColumn("streak_id", winStreakId)
+      .groupBy("team_id", "streak_id")
+      .agg(sum("is_win").alias("streak_length"), min("match_date").alias("start_date"), max("match_date").alias("end_date"))
+      .groupBy("team_id")
+      .agg(max("streak_length").alias("max_win_streak"))
+      .join(dimTeam.select("team_id", "team_name"), Seq("team_id"), "left")
+      .select("team_id", "team_name", "max_win_streak")
+      .orderBy(desc("max_win_streak"))
+
+    writeTable(winStreaks, s"$targetSchema.fact_team_max_win_streak")
+
+    // === TEAM-LEVEL: LONGEST SCORING STREAK (consecutive matches scoring at least 1 goal) ===
+    val scoreFlag = teamMatchPerspective.withColumn("scored", when(col("goals_for") > 0, 1).otherwise(0))
+    val scoreGrpWindow = Window.partitionBy("team_id").orderBy(col("match_date").cast("timestamp"))
+    val scoreStreakId = sum(when(col("scored") === 0, 1).otherwise(0)).over(scoreGrpWindow)
+    val scoringStreaks = scoreFlag.withColumn("streak_id", scoreStreakId)
+      .groupBy("team_id", "streak_id")
+      .agg(sum("scored").alias("scoring_streak_length"))
+      .groupBy("team_id")
+      .agg(max("scoring_streak_length").alias("max_scoring_streak"))
+      .join(dimTeam.select("team_id", "team_name"), Seq("team_id"), "left")
+      .select("team_id", "team_name", "max_scoring_streak")
+      .orderBy(desc("max_scoring_streak"))
+
+    writeTable(scoringStreaks, s"$targetSchema.fact_team_max_scoring_streak")
+
+    // === PLAYER-LEVEL: attempt (only if events table exists) ===
+    // We will try to load a table called "Match_Event" or "Event" or "MatchEvents" if present.
+    val possibleEventTables = Seq("Match_Event", "Event", "MatchEvents", "MatchEvents2", "MatchEvent")
+    var eventsDF: DataFrame = spark.emptyDataFrame
+    for (t <- possibleEventTables if eventsDF.rdd.isEmpty()) {
+      try {
+        val tmp = readTable(spark, t)
+        if (tmp.columns.nonEmpty) {
+          eventsDF = tmp
+        }
+      } catch {
+        case _: Throwable => // ignore and try next
+      }
     }
 
-    // === VALIDATIONS ===
-    println("🔍 Running post-load validations...")
-    val cntFact = spark.read.jdbc(jdbcUrl, s""""$targetSchema"."fact_match"""", jdbcProps).count()
-    val cntTeamSeason = spark.read.jdbc(jdbcUrl, s""""$targetSchema"."fact_team_season"""", jdbcProps).count()
-    println(s"Post-load counts: fact_match=$cntFact, fact_team_season=$cntTeamSeason")
-
-    val factMatchDF = spark.read.jdbc(jdbcUrl, s""""$targetSchema"."fact_match"""", jdbcProps)
-    val dimLeagueDF = spark.read.jdbc(jdbcUrl, s""""$targetSchema"."dim_league"""", jdbcProps)
-    val missingLeagueFK = factMatchDF.join(dimLeagueDF, factMatchDF("league_id") === dimLeagueDF("league_id"), "left_anti")
-    if (missingLeagueFK.count() > 0) {
-      println(s"⚠ Warning: ${missingLeagueFK.count()} fact_match rows have league_id that don't exist in dim_league.")
+    if (eventsDF.rdd.isEmpty()) {
+      println("ℹ️ No match-events table found (player-level goals/assists/xG skipped). If you have event table name, add it as one of possibleEventTables.")
     } else {
-      println("✅ All league_ids in fact_match have matching entries in dim_league.")
-    }
+      println(s"✅ Found events table with columns: ${eventsDF.columns.mkString(", ")}")
+      // Try to compute player goals/assists if columns exist
+      val lowerCols = eventsDF.columns.map(_.toLowerCase()).toSet
 
-    val dupMatches = factMatchDF.groupBy("match_id").count().filter("count > 1")
-    if (dupMatches.count() > 0) {
-      println(s"⚠ Duplicate match_id found: ${dupMatches.count()} rows")
-    } else {
-      println("✅ No duplicate match_ids found.")
-    }
+      // Heuristics for column names
+      val playerCol = eventsDF.columns.find(c => Seq("player_id", "player_api_id", "playerid", "player").contains(c.toLowerCase())).getOrElse("")
+      val eventTypeCol = eventsDF.columns.find(c => Seq("event_type", "type", "event").contains(c.toLowerCase())).getOrElse("")
+      val subTypeCol = eventsDF.columns.find(c => Seq("event_subtype", "subtype").contains(c.toLowerCase())).getOrElse("")
+      val shotDistCol = eventsDF.columns.find(c => Seq("shot_distance", "distance").contains(c.toLowerCase())).getOrElse("")
+      val assistCol = eventsDF.columns.find(c => Seq("assist_player_id", "assist", "assist_player").contains(c.toLowerCase())).getOrElse("")
 
-    createIndexes()
-    println("✅ Full ETL finished successfully.")
-  }
-}
+      val ev = eventsDF
+
+      // PLAYER GOALS (requires event_type indicating 'goal' or subtype)
+      val goalEvents = if (eventTypeCol.nonEmpty) {
+        ev.filter(lower(col(eventTypeCol)).contains("goal") || lower(col(eventTypeCol)) === lit("goal"))
+      } else if (subTypeCol.nonEmpty) {
+        ev.filter(lower(col(subTypeCol)).conta
