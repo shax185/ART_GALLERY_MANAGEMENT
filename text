@@ -1,40 +1,12 @@
-MP =
-SUM ( 'football_dw2_fact_league_standings'[matches_played] )
-
-Wins =
-SUM ( 'football_dw2_fact_league_standings'[wins] )
-
-Draws =
-SUM ( 'football_dw2_fact_league_standings'[draws] )
-
-Losses =
-SUM ( 'football_dw2_fact_league_standings'[losses] )
-
-GF =
-SUM ( 'football_dw2_fact_league_standings'[goals_for] )
-
-GA =
-SUM ( 'football_dw2_fact_league_standings'[goals_against] )
-
-GD = [GF] - [GA]
-
-Points =
-SUM ( 'football_dw2_fact_league_standings'[points] )
-
-Rank =
-RANKX (
-    ALLSELECTED ( 'football_dw2_dim_team'[team_long_name] ),
-    [Points],
+Rank = 
+RANKX(
+    FILTER(
+        fact_league_standings,
+        fact_league_standings[Season] = SELECTEDVALUE(fact_league_standings[Season]) &&
+        fact_league_standings[League] = SELECTEDVALUE(fact_league_standings[League])
+    ),
+    fact_league_standings[Points],
     ,
     DESC,
-    DENSE
+    Dense
 )
-
-Win % =
-DIVIDE ( [Wins], [MP] )
-
-Avg Goals For =
-DIVIDE ( [GF], [MP] )
-
-Avg Goals Against =
-DIVIDE ( [GA], [MP] )
