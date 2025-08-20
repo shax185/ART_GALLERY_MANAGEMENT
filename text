@@ -1,56 +1,43 @@
-# === EXTRA TRANSFORMATIONS ===
+from sqlalchemy import create_engine, Integer, String, Float, Date, Time
+import psycopg2
 
-# 1. Shot efficiency (avoid division by 0)
-df['home_shot_accuracy'] = (df['hst'] / df['hs']).replace([np.inf, np.nan], 0).round(2)
-df['away_shot_accuracy'] = (df['ast'] / df['as']).replace([np.inf, np.nan], 0).round(2)
+# Postgres connection (update with your credentials)
+engine = create_engine("postgresql+psycopg2://username:password@localhost:5432/laliga_db")
 
-# 2. Streak calculations
-# Prepare match results for each team
-home_results = df[['date','hometeam','ftr']].rename(columns={'hometeam':'team'})
-away_results = df[['date','awayteam','ftr']].rename(columns={'awayteam':'team'})
-
-# Normalize result from team perspective
-home_results['result'] = home_results['ftr'].map({'H':'W','D':'D','A':'L'})
-away_results['result'] = away_results['ftr'].map({'A':'W','D':'D','H':'L'})
-
-# Combine and sort by team + date
-all_results = pd.concat([home_results, away_results], ignore_index=True)
-all_results = all_results.sort_values(['team','date'])
-
-# Function to compute streaks
-def compute_streaks(results):
-    streaks = []
-    win_streak = draw_streak = loss_streak = 0
-    last = None
-    for r in results:
-        if r == 'W':
-            win_streak += 1
-            draw_streak = loss_streak = 0
-        elif r == 'D':
-            draw_streak += 1
-            win_streak = loss_streak = 0
-        elif r == 'L':
-            loss_streak += 1
-            win_streak = draw_streak = 0
-        streaks.append((win_streak, draw_streak, loss_streak))
-    return streaks
-
-# Apply streak computation per team
-all_results[['win_streak','draw_streak','loss_streak']] = (
-    all_results.groupby('team')['result'].transform(lambda x: compute_streaks(x.tolist())).apply(pd.Series)
-)
-
-# Merge streaks back into main df (home + away separately)
-df = df.merge(
-    all_results[['team','date','win_streak','draw_streak','loss_streak']],
-    left_on=['hometeam','date'], right_on=['team','date'], how='left'
-).rename(columns={'win_streak':'home_win_streak','draw_streak':'home_draw_streak','loss_streak':'home_loss_streak'}).drop(columns='team')
-
-df = df.merge(
-    all_results[['team','date','win_streak','draw_streak','loss_streak']],
-    left_on=['awayteam','date'], right_on=['team','date'], how='left'
-).rename(columns={'win_streak':'away_win_streak','draw_streak':'away_draw_streak','loss_streak':'away_loss_streak'}).drop(columns='team')
-
-print("✅ Added shot efficiency + streak features")
-df[['date','hometeam','awayteam','ftr','home_shot_accuracy','away_shot_accuracy',
-    'home_win_streak','away_win_streak']].head(10)
+dtype_mapping = {
+    "Div": String(10),
+    "Date": Date,
+    "Time": Time,
+    "HomeTeam": String(100),
+    "AwayTeam": String(100),
+    "FTHG": Integer,
+    "FTAG": Integer,
+    "FTR": String(1),
+    "HTHG": Integer,
+    "HTAG": Integer,
+    "HTR": String(1),
+    "Attendance": Integer,
+    "Referee": String(100),
+    "home_shots": Integer,
+    "away_shots": Integer,
+    "HST": Integer,
+    "AST": Integer,
+    "HHW": Integer,
+    "AHW": Integer,
+    "HC": Integer,
+    "AC": Integer,
+    "HF": Integer,
+    "AF": Integer,
+    "HFKC": Integer,
+    "AFKC": Integer,
+    "HO": Integer,
+    "AO": Integer,
+    "HY": Integer,
+    "AY": Integer,
+    "HR": Integer,
+    "AR": Integer,
+    "home_shot_efficiency": Float,
+    "away_shot_efficiency": Float,
+    "home_streak": Integer,
+    "away_streak": Integer
+}
