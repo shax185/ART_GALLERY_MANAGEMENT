@@ -1,50 +1,54 @@
-# CELL 2 — alias mapping (rename common variants to canonical names)
-aliases = {
-    'div':     ['div','division'],
-    'date':    ['date','match_date','day'],
-    'time':    ['time','kickoff_time','kickoff'],
-    'hometeam':['hometeam','home_team'],
-    'awayteam':['awayteam','away_team'],
-    'fthg':    ['fthg','hg','full_time_home_team_goals','home_goals'],
-    'ftag':    ['ftag','ag','full_time_away_team_goals','away_goals'],
-    'ftr':     ['ftr','res','result','full_time_result'],
-    'hthg':    ['hthg','ht_hg','half_time_home_goals','ht_home_goals'],
-    'htag':    ['htag','ht_ag','half_time_away_goals','ht_away_goals'],
-    'htr':     ['htr','ht_res','half_time_result'],
-    'attendance':['attendance','crowd','att'],
-    'referee': ['referee','ref'],
-    'hs':      ['hs','home_shots'],
-    'as':      ['as','away_shots'],
-    'hst':     ['hst','home_shots_on_target'],
-    'ast':     ['ast','away_shots_on_target'],
-    'hhw':     ['hhw','home_hit_woodwork'],
-    'ahw':     ['ahw','away_hit_woodwork'],
-    'hc':      ['hc','home_corners'],
-    'ac':      ['ac','away_corners'],
-    'hf':      ['hf','home_fouls'],
-    'af':      ['af','away_fouls'],
-    'hfkc':    ['hfkc','hfkc','home_freekicks_conceded','home_fk_conceded'],
-    'afkc':    ['afkc','away_freekicks_conceded','away_fk_conceded'],
-    'ho':      ['ho','home_offsides'],
-    'ao':      ['ao','away_offsides'],
-    'hy':      ['hy','home_yellow_cards'],
-    'ay':      ['ay','away_yellow_cards'],
-    'hr':      ['hr','home_red_cards'],
-    'ar':      ['ar','away_red_cards']
-}
-
-cols = set(df.columns)
-rename_map = {}
-for canon, alist in aliases.items():
-    for a in alist:
-        if a in cols:
-            rename_map[a] = canon
-            break
-
-df = df.rename(columns=rename_map)
-required = list(aliases.keys())
-missing = [c for c in required if c not in df.columns]
-if missing:
-    print("⚠️ NOTE: These required columns are missing from your file (they'll be created as NaN):", missing)
+# CELL 3 — parse date & time and create kickoff datetime (robustly)
+# date
+if 'date' in df.columns:
+    df['date'] = pd.to_datetime(df['date'], dayfirst=True, errors='coerce')
 else:
-    print("All required canonical columns present.")
+    df['date'] = pd.NaT
+
+# time: basic normalization (keep as string if not parseable)
+if 'time' in df.columns:
+    df['time'] = df['time'].astype(str).str.strip().replace('nan', np.nan)
+    # remove trailing seconds part like ':00.0'
+    df['time'] = df['time'].str.replace(r'\.\d+$', '', regex=True)
+    # normalize blank-like values to NaN
+    df.loc[df['time'].str.strip().isin(['', 'nan', 'None', 'NaN']) , 'time'] = np.nan
+else:
+    df['time'] = np.nan
+
+# try combine into a kickoff timestamp when both present
+df['kickoff'] = pd.to_datetime(
+    df['date'].dt.strftime('%Y-%m-%d').fillna('') + ' ' + df['time'].fillna(''),
+    errors='coerce'
+)
+print("Parsed dates: ", df['date'].notna().sum(), "kickoffs parsed:", df['kickoff'].notna().sum())
+
+
+# CELL 4 — coerce numeric stat columns (remove commas/other noise) and drop rows missing FT goals
+numeric_cols = [
+    'fthg','ftag','hthg','htag','attendance',
+    'hs','as','hst','ast','hhw','ahw','hc','ac','hf','af','hfkc','afkc','ho','ao','hy','ay','hr','ar'
+]
+
+for col in numeric_cols:
+    if col in df.columns:
+        # strip out non-digit and non-minus characters (handles commas)
+        df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d\-]', '', regex=True), errors='coerce')
+
+# drop rows that lack final score (we can't transform these)
+if 'fthg' in df.columns and 'ftag' in df.columns:
+    before = len(df)
+    df = df.dropna(subset=['fthg','ftag']).copy()
+    after = len(df)
+    print(f"Dropped {before - after} rows missing FTHG/FTAG. Rows remaining: {after}")
+else:
+    print("⚠️ fthg/ftag not both present — cannot drop missing final-score rows; check your inputs.")
+
+
+    # CELL 5 — convert ints where appropriate (safe conversion)
+for c in ['fthg','ftag','hthg','htag','hs','as','hst','ast','hhw','ahw','hc','ac','hf','af','hfkc','afkc','ho','ao','hy','ay','hr','ar']:
+    if c in df.columns:
+        df[c] = df[c].fillna(0).astype(int)
+
+# attendance: if present, keep as int but allow large values
+if 'attendance' in df.columns:
+    df['attendance'] = df['attendance'].fillna(0).astype(int)
