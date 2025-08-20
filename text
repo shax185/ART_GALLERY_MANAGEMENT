@@ -1,54 +1,56 @@
-# CELL 3 — parse date & time and create kickoff datetime (robustly)
-# date
-if 'date' in df.columns:
-    df['date'] = pd.to_datetime(df['date'], dayfirst=True, errors='coerce')
-else:
-    df['date'] = pd.NaT
+# === EXTRA TRANSFORMATIONS ===
 
-# time: basic normalization (keep as string if not parseable)
-if 'time' in df.columns:
-    df['time'] = df['time'].astype(str).str.strip().replace('nan', np.nan)
-    # remove trailing seconds part like ':00.0'
-    df['time'] = df['time'].str.replace(r'\.\d+$', '', regex=True)
-    # normalize blank-like values to NaN
-    df.loc[df['time'].str.strip().isin(['', 'nan', 'None', 'NaN']) , 'time'] = np.nan
-else:
-    df['time'] = np.nan
+# 1. Shot efficiency (avoid division by 0)
+df['home_shot_accuracy'] = (df['hst'] / df['hs']).replace([np.inf, np.nan], 0).round(2)
+df['away_shot_accuracy'] = (df['ast'] / df['as']).replace([np.inf, np.nan], 0).round(2)
 
-# try combine into a kickoff timestamp when both present
-df['kickoff'] = pd.to_datetime(
-    df['date'].dt.strftime('%Y-%m-%d').fillna('') + ' ' + df['time'].fillna(''),
-    errors='coerce'
+# 2. Streak calculations
+# Prepare match results for each team
+home_results = df[['date','hometeam','ftr']].rename(columns={'hometeam':'team'})
+away_results = df[['date','awayteam','ftr']].rename(columns={'awayteam':'team'})
+
+# Normalize result from team perspective
+home_results['result'] = home_results['ftr'].map({'H':'W','D':'D','A':'L'})
+away_results['result'] = away_results['ftr'].map({'A':'W','D':'D','H':'L'})
+
+# Combine and sort by team + date
+all_results = pd.concat([home_results, away_results], ignore_index=True)
+all_results = all_results.sort_values(['team','date'])
+
+# Function to compute streaks
+def compute_streaks(results):
+    streaks = []
+    win_streak = draw_streak = loss_streak = 0
+    last = None
+    for r in results:
+        if r == 'W':
+            win_streak += 1
+            draw_streak = loss_streak = 0
+        elif r == 'D':
+            draw_streak += 1
+            win_streak = loss_streak = 0
+        elif r == 'L':
+            loss_streak += 1
+            win_streak = draw_streak = 0
+        streaks.append((win_streak, draw_streak, loss_streak))
+    return streaks
+
+# Apply streak computation per team
+all_results[['win_streak','draw_streak','loss_streak']] = (
+    all_results.groupby('team')['result'].transform(lambda x: compute_streaks(x.tolist())).apply(pd.Series)
 )
-print("Parsed dates: ", df['date'].notna().sum(), "kickoffs parsed:", df['kickoff'].notna().sum())
 
+# Merge streaks back into main df (home + away separately)
+df = df.merge(
+    all_results[['team','date','win_streak','draw_streak','loss_streak']],
+    left_on=['hometeam','date'], right_on=['team','date'], how='left'
+).rename(columns={'win_streak':'home_win_streak','draw_streak':'home_draw_streak','loss_streak':'home_loss_streak'}).drop(columns='team')
 
-# CELL 4 — coerce numeric stat columns (remove commas/other noise) and drop rows missing FT goals
-numeric_cols = [
-    'fthg','ftag','hthg','htag','attendance',
-    'hs','as','hst','ast','hhw','ahw','hc','ac','hf','af','hfkc','afkc','ho','ao','hy','ay','hr','ar'
-]
+df = df.merge(
+    all_results[['team','date','win_streak','draw_streak','loss_streak']],
+    left_on=['awayteam','date'], right_on=['team','date'], how='left'
+).rename(columns={'win_streak':'away_win_streak','draw_streak':'away_draw_streak','loss_streak':'away_loss_streak'}).drop(columns='team')
 
-for col in numeric_cols:
-    if col in df.columns:
-        # strip out non-digit and non-minus characters (handles commas)
-        df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d\-]', '', regex=True), errors='coerce')
-
-# drop rows that lack final score (we can't transform these)
-if 'fthg' in df.columns and 'ftag' in df.columns:
-    before = len(df)
-    df = df.dropna(subset=['fthg','ftag']).copy()
-    after = len(df)
-    print(f"Dropped {before - after} rows missing FTHG/FTAG. Rows remaining: {after}")
-else:
-    print("⚠️ fthg/ftag not both present — cannot drop missing final-score rows; check your inputs.")
-
-
-    # CELL 5 — convert ints where appropriate (safe conversion)
-for c in ['fthg','ftag','hthg','htag','hs','as','hst','ast','hhw','ahw','hc','ac','hf','af','hfkc','afkc','ho','ao','hy','ay','hr','ar']:
-    if c in df.columns:
-        df[c] = df[c].fillna(0).astype(int)
-
-# attendance: if present, keep as int but allow large values
-if 'attendance' in df.columns:
-    df['attendance'] = df['attendance'].fillna(0).astype(int)
+print("✅ Added shot efficiency + streak features")
+df[['date','hometeam','awayteam','ftr','home_shot_accuracy','away_shot_accuracy',
+    'home_win_streak','away_win_streak']].head(10)
