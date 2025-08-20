@@ -189,5 +189,40 @@ SerieA23.csv
 notes.txt
 
 Summary
-6 files
+6 file
+
+
+
+import pandas as pd
+
+# Load raw dataset
+df = pd.read_csv("LaLiga23.csv")
+
+# Define required columns
+required_cols = [
+    "Div", "Date", "Time", 
+    "HomeTeam", "AwayTeam", 
+    "FTHG", "HG", "FTAG", "AG", "FTR", "Res",
+    "HTHG", "HTAG", "HTR",
+    "Attendance", "Referee",
+    "HS", "AS", "HST", "AST", "HHW", "AHW", 
+    "HC", "AC", "HF", "AF", "HFKC", "AFKC",
+    "HO", "AO", "HY", "AY", "HR", "AR"
+]
+
+# Keep only these columns (dropping others)
+df_clean = df[required_cols]
+
+# Standardize column names (snake_case)
+df_clean.columns = [col.lower().strip().replace(" ", "_") for col in df_clean.columns]
+
+# Convert Date to datetime
+df_clean['date'] = pd.to_datetime(df_clean['date'], errors='coerce', dayfirst=True)
+
+# Save cleaned subset
+df_clean.to_csv("LaLiga23_subset.csv", index=False)
+
+print("✅ Subset dataset created with only required columns!")
+print("Shape:", df_clean.shape)
+print(df_clean.head())
 
