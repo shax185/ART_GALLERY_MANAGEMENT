@@ -1,39 +1,49 @@
-WITH home_matches AS (
-    SELECT 
-        ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS match_order,
-        hometeam AS team,
-        CASE WHEN ftr = 'H' THEN 1 ELSE 0 END AS is_win
-    FROM laliga_matches
-),
-away_matches AS (
-    SELECT 
-        ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS match_order,
-        awayteam AS team,
-        CASE WHEN ftr = 'A' THEN 1 ELSE 0 END AS is_win
-    FROM laliga_matches
-),
-all_matches AS (
-    SELECT * FROM home_matches
-    UNION ALL
-    SELECT * FROM away_matches
-),
-streak_groups AS (
-    SELECT
-        team,
-        is_win,
-        SUM(CASE WHEN is_win = 0 THEN 1 ELSE 0 END)
-            OVER (PARTITION BY team ORDER BY match_order) AS grp
-    FROM all_matches
-),
-streak_lengths AS (
-    SELECT team, grp, COUNT(*) AS streak_len
-    FROM streak_groups
-    WHERE is_win = 1
-    GROUP BY team, grp
-)
-SELECT
-    team,
-    MAX(streak_len) AS longest_win_streak
-FROM streak_lengths
-GROUP BY team
-ORDER BY longest_win_streak DESC;
+import yfinance as yf
+import pandas as pd
+from datetime import datetime
+
+# Define stock tickers
+tickers = {
+    "NIFTY50": "^NSEI",        # Nifty Index
+    "RELIANCE": "RELIANCE.NS",
+    "TCS": "TCS.NS",
+    "INFOSYS": "INFY.NS"
+}
+
+# Date range
+start_date = "2024-01-01"
+end_date = datetime.today().strftime("%Y-%m-%d")
+
+# Empty list for clean records
+records = []
+
+for name, ticker in tickers.items():
+    stock = yf.download(ticker, start=start_date, end=end_date, interval="1d")
+    
+    stock.reset_index(inplace=True)   # reset index (Date)
+    stock["Company"] = name           # add stock name
+    
+    # Rename columns for clarity
+    stock.rename(columns={
+        "Date": "TradeDate",
+        "Open": "OpenPrice",
+        "High": "HighPrice",
+        "Low": "LowPrice",
+        "Close": "ClosePrice",
+        "Adj Close": "AdjClosePrice",
+        "Volume": "TradeVolume"
+    }, inplace=True)
+    
+    # Reorder columns
+    stock = stock[["TradeDate", "Company", "OpenPrice", "HighPrice", "LowPrice", "ClosePrice", "AdjClosePrice", "TradeVolume"]]
+    
+    records.append(stock)
+
+# Combine all stocks into one clean DataFrame
+df = pd.concat(records, ignore_index=True)
+
+# Save to CSV
+df.to_csv("DailyStockData.csv", index=False)
+
+print("✅ Clean daily stock data saved as DailyStockData.csv")
+print(df.head(10))
