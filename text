@@ -1,37 +1,48 @@
 import pandas as pd
-import psycopg2
 from sqlalchemy import create_engine
 
 # Load CSV
 df = pd.read_csv("sql_ready.csv")
 
-# Convert date to proper format
+# Ensure TradeDate is in proper DATE format
 df['TradeDate'] = pd.to_datetime(df['TradeDate']).dt.date
 
-# Create dim_date
+# ------------------------
+# DIM DATE
+# ------------------------
 dim_date = pd.DataFrame({
-    "date_id": df["TradeDate"].unique()
+    "trade_date": df["TradeDate"].unique()
 })
-dim_date["day"] = pd.to_datetime(dim_date["date_id"]).dt.day
-dim_date["month"] = pd.to_datetime(dim_date["date_id"]).dt.month
-dim_date["year"] = pd.to_datetime(dim_date["date_id"]).dt.year
-dim_date["weekday"] = pd.to_datetime(dim_date["date_id"]).dt.day_name()
-dim_date["quarter"] = pd.to_datetime(dim_date["date_id"]).dt.quarter
+dim_date = dim_date.sort_values("trade_date").reset_index(drop=True)
+dim_date["day"] = pd.to_datetime(dim_date["trade_date"]).dt.day
+dim_date["month"] = pd.to_datetime(dim_date["trade_date"]).dt.month
+dim_date["year"] = pd.to_datetime(dim_date["trade_date"]).dt.year
+dim_date["day_of_week"] = pd.to_datetime(dim_date["trade_date"]).dt.day_name()
+dim_date["quarter"] = pd.to_datetime(dim_date["trade_date"]).dt.quarter
 
-# Connect to PostgreSQL
-engine = create_engine("postgresql://postgres:root@localhost:5432/yourdb")
+# Add surrogate key
+dim_date["date_id"] = dim_date.index + 1  
 
-# Load dim_date
-dim_date.to_sql("dim_date", engine, if_exists="replace", index=False)
+# ------------------------
+# DIM COMPANY
+# ------------------------
+dim_company = pd.DataFrame({
+    "company_name": df["Company"].unique()
+})
+dim_company = dim_company.sort_values("company_name").reset_index(drop=True)
+dim_company["company_id"] = dim_company.index + 1  
 
-# Load fact_stock_prices
-fact_stock = df.rename(columns={
-    "Date": "date_id",
-    "OpenPrice": "open_price",
+# ------------------------
+# FACT TABLE
+# ------------------------
+fact_stock = df.merge(dim_date, left_on="TradeDate", right_on="trade_date", how="left")
+fact_stock = fact_stock.merge(dim_company, left_on="Company", right_on="company_name", how="left")
+
+fact_stock = fact_stock.rename(columns={
+    "Open price": "open_price",
     "HighPrice": "high_price",
-    "LowPrice": "low_price",
-    "ClosePrice": "close_price",
-    "TradeVolume": "trade_volume",
+    "Lowprice": "low_price",
+    "Trade volume": "trade_volume",
     "DailyReturnPct": "daily_return_pct",
     "PriceRange": "price_range",
     "Volatility_7d": "volatility_7d",
@@ -41,29 +52,44 @@ fact_stock = df.rename(columns={
     "VolumeSpike": "volume_spike"
 })
 
+fact_stock = fact_stock[[
+    "date_id", "company_id", "open_price", "high_price", "low_price",
+    "trade_volume", "daily_return_pct", "price_range", "volatility_7d",
+    "sma7", "sma30", "vol_ma7", "volume_spike"
+]]
+
+# ------------------------
+# LOAD INTO POSTGRES
+# ------------------------
+engine = create_engine("postgresql://postgres:root@localhost:5432/yourdb")
+
+dim_date.to_sql("dim_date", engine, if_exists="replace", index=False)
+dim_company.to_sql("dim_company", engine, if_exists="replace", index=False)
 fact_stock.to_sql("fact_stock_prices", engine, if_exists="replace", index=False)
 
 CREATE TABLE dim_date (
-	date_id SERIAL PRIMARY KEY,
-	trade_date DATE UNIQUE NOT NULL,
-	day INT,
-	month INT,
-	quarter INT,
-	year INT,
-	day_of_week VARCHAR(10)
+    date_id SERIAL PRIMARY KEY,
+    trade_date DATE UNIQUE NOT NULL,
+    day INT,
+    month INT,
+    quarter INT,
+    year INT,
+    day_of_week VARCHAR(10)
 );
 
+CREATE TABLE dim_company (
+    company_id SERIAL PRIMARY KEY,
+    company_name VARCHAR(100) UNIQUE NOT NULL
+);
 
 CREATE TABLE fact_stock_prices (
     fact_id SERIAL PRIMARY KEY,
     date_id INT NOT NULL REFERENCES dim_date(date_id),
-    stock_id INT NOT NULL REFERENCES dim_stock(stock_id),
-    
+    company_id INT NOT NULL REFERENCES dim_company(company_id),
+
     open_price FLOAT,
     high_price FLOAT,
     low_price FLOAT,
-    close_price FLOAT,
-    adj_close FLOAT,
     trade_volume BIGINT,
 
     daily_return_pct FLOAT,
