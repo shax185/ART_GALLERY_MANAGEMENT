@@ -1,43 +1,39 @@
-from sqlalchemy import create_engine, Integer, String, Float, Date, Time
-import psycopg2
-
-# Postgres connection (update with your credentials)
-engine = create_engine("postgresql+psycopg2://username:password@localhost:5432/laliga_db")
-
-dtype_mapping = {
-    "Div": String(10),
-    "Date": Date,
-    "Time": Time,
-    "HomeTeam": String(100),
-    "AwayTeam": String(100),
-    "FTHG": Integer,
-    "FTAG": Integer,
-    "FTR": String(1),
-    "HTHG": Integer,
-    "HTAG": Integer,
-    "HTR": String(1),
-    "Attendance": Integer,
-    "Referee": String(100),
-    "home_shots": Integer,
-    "away_shots": Integer,
-    "HST": Integer,
-    "AST": Integer,
-    "HHW": Integer,
-    "AHW": Integer,
-    "HC": Integer,
-    "AC": Integer,
-    "HF": Integer,
-    "AF": Integer,
-    "HFKC": Integer,
-    "AFKC": Integer,
-    "HO": Integer,
-    "AO": Integer,
-    "HY": Integer,
-    "AY": Integer,
-    "HR": Integer,
-    "AR": Integer,
-    "home_shot_efficiency": Float,
-    "away_shot_efficiency": Float,
-    "home_streak": Integer,
-    "away_streak": Integer
-}
+WITH home_matches AS (
+    SELECT 
+        ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS match_order,
+        hometeam AS team,
+        CASE WHEN ftr = 'H' THEN 1 ELSE 0 END AS is_win
+    FROM laliga_matches
+),
+away_matches AS (
+    SELECT 
+        ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS match_order,
+        awayteam AS team,
+        CASE WHEN ftr = 'A' THEN 1 ELSE 0 END AS is_win
+    FROM laliga_matches
+),
+all_matches AS (
+    SELECT * FROM home_matches
+    UNION ALL
+    SELECT * FROM away_matches
+),
+streak_groups AS (
+    SELECT
+        team,
+        is_win,
+        SUM(CASE WHEN is_win = 0 THEN 1 ELSE 0 END)
+            OVER (PARTITION BY team ORDER BY match_order) AS grp
+    FROM all_matches
+),
+streak_lengths AS (
+    SELECT team, grp, COUNT(*) AS streak_len
+    FROM streak_groups
+    WHERE is_win = 1
+    GROUP BY team, grp
+)
+SELECT
+    team,
+    MAX(streak_len) AS longest_win_streak
+FROM streak_lengths
+GROUP BY team
+ORDER BY longest_win_streak DESC;
