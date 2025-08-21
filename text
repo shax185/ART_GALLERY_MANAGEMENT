@@ -3,14 +3,14 @@ import psycopg2
 from sqlalchemy import create_engine
 
 # Load CSV
-df = pd.read_csv("reliance_enriched.csv")
+df = pd.read_csv("sql_ready.csv")
 
 # Convert date to proper format
-df['Date'] = pd.to_datetime(df['Date']).dt.date
+df['TradeDate'] = pd.to_datetime(df['TradeDate']).dt.date
 
 # Create dim_date
 dim_date = pd.DataFrame({
-    "date_id": df["Date"].unique()
+    "date_id": df["TradeDate"].unique()
 })
 dim_date["day"] = pd.to_datetime(dim_date["date_id"]).dt.day
 dim_date["month"] = pd.to_datetime(dim_date["date_id"]).dt.month
@@ -19,7 +19,7 @@ dim_date["weekday"] = pd.to_datetime(dim_date["date_id"]).dt.day_name()
 dim_date["quarter"] = pd.to_datetime(dim_date["date_id"]).dt.quarter
 
 # Connect to PostgreSQL
-engine = create_engine("postgresql://username:password@localhost:5432/yourdb")
+engine = create_engine("postgresql://postgres:root@localhost:5432/yourdb")
 
 # Load dim_date
 dim_date.to_sql("dim_date", engine, if_exists="replace", index=False)
@@ -31,7 +31,6 @@ fact_stock = df.rename(columns={
     "HighPrice": "high_price",
     "LowPrice": "low_price",
     "ClosePrice": "close_price",
-    "Adj Close": "adj_close",
     "TradeVolume": "trade_volume",
     "DailyReturnPct": "daily_return_pct",
     "PriceRange": "price_range",
@@ -43,3 +42,35 @@ fact_stock = df.rename(columns={
 })
 
 fact_stock.to_sql("fact_stock_prices", engine, if_exists="replace", index=False)
+
+CREATE TABLE dim_date (
+	date_id SERIAL PRIMARY KEY,
+	trade_date DATE UNIQUE NOT NULL,
+	day INT,
+	month INT,
+	quarter INT,
+	year INT,
+	day_of_week VARCHAR(10)
+);
+
+
+CREATE TABLE fact_stock_prices (
+    fact_id SERIAL PRIMARY KEY,
+    date_id INT NOT NULL REFERENCES dim_date(date_id),
+    stock_id INT NOT NULL REFERENCES dim_stock(stock_id),
+    
+    open_price FLOAT,
+    high_price FLOAT,
+    low_price FLOAT,
+    close_price FLOAT,
+    adj_close FLOAT,
+    trade_volume BIGINT,
+
+    daily_return_pct FLOAT,
+    price_range FLOAT,
+    volatility_7d FLOAT,
+    sma7 FLOAT,
+    sma30 FLOAT,
+    vol_ma7 FLOAT,
+    volume_spike BOOLEAN
+);
