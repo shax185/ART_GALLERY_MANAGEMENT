@@ -1,49 +1,130 @@
-import yfinance as yf
-import pandas as pd
-from datetime import datetime
+Perfect mindset ✅ — the more we clean + enrich upfront, the easier your SQL queries + BI dashboards will be later.
 
-# Define stock tickers
-tickers = {
-    "NIFTY50": "^NSEI",        # Nifty Index
-    "RELIANCE": "RELIANCE.NS",
-    "TCS": "TCS.NS",
-    "INFOSYS": "INFY.NS"
-}
+Let’s think of this in terms of a Data Warehouse mindset:
+👉 We don’t just want raw OHLC data.
+👉 We want analytics-ready data with useful derived fields.
 
-# Date range
-start_date = "2024-01-01"
-end_date = datetime.today().strftime("%Y-%m-%d")
 
-# Empty list for clean records
-records = []
+---
 
-for name, ticker in tickers.items():
-    stock = yf.download(ticker, start=start_date, end=end_date, interval="1d")
-    
-    stock.reset_index(inplace=True)   # reset index (Date)
-    stock["Company"] = name           # add stock name
-    
-    # Rename columns for clarity
-    stock.rename(columns={
-        "Date": "TradeDate",
-        "Open": "OpenPrice",
-        "High": "HighPrice",
-        "Low": "LowPrice",
-        "Close": "ClosePrice",
-        "Adj Close": "AdjClosePrice",
-        "Volume": "TradeVolume"
-    }, inplace=True)
-    
-    # Reorder columns
-    stock = stock[["TradeDate", "Company", "OpenPrice", "HighPrice", "LowPrice", "ClosePrice", "AdjClosePrice", "TradeVolume"]]
-    
-    records.append(stock)
+🔹 1. Core Cleaning (Mandatory)
 
-# Combine all stocks into one clean DataFrame
-df = pd.concat(records, ignore_index=True)
+Handle missing values (holidays → mark them).
 
-# Save to CSV
-df.to_csv("DailyStockData.csv", index=False)
+Ensure numeric consistency (High ≥ Low, etc.).
 
-print("✅ Clean daily stock data saved as DailyStockData.csv")
-print(df.head(10))
+Drop duplicates.
+
+Fix data types (Date = DATE, Prices = FLOAT, Volume = BIGINT).
+
+
+
+---
+
+🔹 2. Enrichment (Analytics-Friendly Features)
+
+Here’s what we should add:
+
+✅ Price Metrics
+
+Daily Return (% Change)
+
+df['DailyReturnPct'] = df.groupby("Company")['ClosePrice'].pct_change() * 100
+
+Daily Price Range
+
+df['PriceRange'] = df['HighPrice'] - df['LowPrice']
+
+Volatility (Rolling Std Dev)
+
+df['Volatility_7d'] = df.groupby("Company")['ClosePrice'].transform(lambda x: x.pct_change().rolling(7).std())
+
+
+✅ Moving Averages
+
+7-day & 30-day SMA (Simple Moving Average)
+
+df['SMA7'] = df.groupby("Company")['ClosePrice'].transform(lambda x: x.rolling(7).mean())
+df['SMA30'] = df.groupby("Company")['ClosePrice'].transform(lambda x: x.rolling(30).mean())
+
+50-day & 200-day SMA (for longer horizon).
+
+
+✅ Market Signals (for visualization/BI)
+
+Golden Cross / Death Cross (when SMA50 crosses SMA200).
+
+RSI (Relative Strength Index) → Popular technical indicator.
+(We can compute later using TA-Lib or pandas formulas).
+
+
+✅ Volume Analysis
+
+Volume Moving Avg → Helps detect unusual trading activity.
+
+df['Vol_MA7'] = df.groupby("Company")['TradeVolume'].transform(lambda x: x.rolling(7).mean())
+
+Volume Spike Flag
+
+df['VolumeSpike'] = df['TradeVolume'] > (2 * df['Vol_MA7'])
+
+
+
+---
+
+🔹 3. Enrichment for SQL Queries
+
+To make querying easier later:
+
+Add Year, Month, Weekday columns:
+
+df['Year'] = df['TradeDate'].dt.year
+df['Month'] = df['TradeDate'].dt.month
+df['Weekday'] = df['TradeDate'].dt.day_name()
+
+Add IsHoliday flag (if no trading, but weekday).
+
+
+
+---
+
+🔹 4. Enrichment for BI Dashboards
+
+KPI-ready fields:
+
+Daily % Return (for heatmaps).
+
+7-day vs 30-day SMA (trend indicators).
+
+Volatility bands.
+
+Top Gainers/Losers per Day.
+
+
+
+
+---
+
+🔹 Example of Final Enriched Table
+
+TradeDate	Company	Open	High	Low	Close	Volume	DailyReturnPct	PriceRange	SMA7	SMA30	Volatility_7d	VolumeSpike	Year	Month	Weekday
+
+2024-01-02	RELIANCE	2450	2470	2440	2465	123456	NaN	30	NaN	NaN	NaN	False	2024	1	Tuesday
+2024-01-03	RELIANCE	2465	2480	2450	2475	143210	0.41	30	NaN	NaN	NaN	True	2024	1	Wednesday
+
+
+
+---
+
+✅ Once this enriched dataset is ready →
+
+SQL side: Easy to run queries like “Top 5 volume spikes in 2024 for Reliance”.
+
+BI side: Easy to build dashboards for “Trend lines, Moving Averages, Gainers/Losers, Volatility heatmaps”.
+
+
+
+---
+
+👉 Do you want me to write the Python enrichment script (adding all these fields into your CSV), so your dataset is immediately SQL & BI friendly?
+
