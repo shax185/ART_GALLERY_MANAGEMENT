@@ -1,75 +1,45 @@
-CREATE TABLE fact_stock_prices (
-    fact_id SERIAL PRIMARY KEY,
-    date_id INT NOT NULL REFERENCES dim_date(date_id),
-    stock_id INT NOT NULL REFERENCES dim_stock(stock_id),
-    
-    open_price FLOAT,
-    high_price FLOAT,
-    low_price FLOAT,
-    close_price FLOAT,
-    adj_close FLOAT,
-    trade_volume BIGINT,
-
-    daily_return_pct FLOAT,
-    price_range FLOAT,
-    volatility_7d FLOAT,
-    sma7 FLOAT,
-    sma30 FLOAT,
-    vol_ma7 FLOAT,
-    volume_spike BOOLEAN
-);
-
 import pandas as pd
 import psycopg2
 from sqlalchemy import create_engine
 
-# Load data
-df = pd.read_csv("reliance_sql_ready.csv")
+# Load CSV
+df = pd.read_csv("reliance_enriched.csv")
 
-# --- Create Date Dimension ---
+# Convert date to proper format
+df['Date'] = pd.to_datetime(df['Date']).dt.date
+
+# Create dim_date
 dim_date = pd.DataFrame({
-    "trade_date": pd.to_datetime(df["TradeDate"]),
+    "date_id": df["Date"].unique()
 })
-dim_date["day"] = dim_date["trade_date"].dt.day
-dim_date["month"] = dim_date["trade_date"].dt.month
-dim_date["quarter"] = dim_date["trade_date"].dt.quarter
-dim_date["year"] = dim_date["trade_date"].dt.year
-dim_date["day_of_week"] = dim_date["trade_date"].dt.day_name()
+dim_date["day"] = pd.to_datetime(dim_date["date_id"]).dt.day
+dim_date["month"] = pd.to_datetime(dim_date["date_id"]).dt.month
+dim_date["year"] = pd.to_datetime(dim_date["date_id"]).dt.year
+dim_date["weekday"] = pd.to_datetime(dim_date["date_id"]).dt.day_name()
+dim_date["quarter"] = pd.to_datetime(dim_date["date_id"]).dt.quarter
 
-dim_date = dim_date.drop_duplicates().reset_index(drop=True)
+# Connect to PostgreSQL
+engine = create_engine("postgresql://username:password@localhost:5432/yourdb")
 
-# --- Create Stock Dimension ---
-dim_stock = pd.DataFrame({
-    "ticker": df["Ticker"].unique(),
-    "company_name": ["Reliance Industries"],  # extend later if multiple
-    "sector": ["Energy"],
-    "exchange": ["NSE"]
+# Load dim_date
+dim_date.to_sql("dim_date", engine, if_exists="replace", index=False)
+
+# Load fact_stock_prices
+fact_stock = df.rename(columns={
+    "Date": "date_id",
+    "OpenPrice": "open_price",
+    "HighPrice": "high_price",
+    "LowPrice": "low_price",
+    "ClosePrice": "close_price",
+    "Adj Close": "adj_close",
+    "TradeVolume": "trade_volume",
+    "DailyReturnPct": "daily_return_pct",
+    "PriceRange": "price_range",
+    "Volatility_7d": "volatility_7d",
+    "SMA7": "sma7",
+    "SMA30": "sma30",
+    "Vol_MA7": "vol_ma7",
+    "VolumeSpike": "volume_spike"
 })
 
-# --- Connect to PostgreSQL ---
-engine = create_engine("postgresql://username:password@localhost:5432/stockdb")
-
-# Insert dimensions
-dim_date.to_sql("dim_date", engine, if_exists="append", index=False)
-dim_stock.to_sql("dim_stock", engine, if_exists="append", index=False)
-
-# --- Map IDs ---
-date_map = pd.read_sql("SELECT * FROM dim_date", engine)
-stock_map = pd.read_sql("SELECT * FROM dim_stock", engine)
-
-df["TradeDate"] = pd.to_datetime(df["TradeDate"])
-fact_df = df.merge(date_map, left_on="TradeDate", right_on="trade_date", how="left")
-fact_df = fact_df.merge(stock_map, left_on="Ticker", right_on="ticker", how="left")
-
-# Select only fact columns + foreign keys
-fact_df = fact_df[[
-    "date_id", "stock_id", "OpenPrice", "HighPrice", "LowPrice",
-    "ClosePrice", "AdjClose", "TradeVolume", "DailyReturnPct",
-    "PriceRange", "Volatility_7d", "SMA7", "SMA30",
-    "Vol_MA7", "VolumeSpike"
-]]
-
-# Insert facts
-fact_df.to_sql("fact_stock_prices", engine, if_exists="append", index=False)
-
-print("✅ Data successfully loaded into Postgres (Star Schema)")
+fact_stock.to_sql("fact_stock_prices", engine, if_exists="replace", index=False)
