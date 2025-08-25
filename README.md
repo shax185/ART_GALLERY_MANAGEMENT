@@ -1,75 +1,145 @@
 import requests
-import json
 import csv
 import time
+import datetime
+import os
 
-# Cities you want to scrape
-cities = ["mumbai", "delhi", "pune"]
+# -----------------------------
+# CONFIG
+# -----------------------------
+CITIES = {
+    "mumbai": {"lat": "19.0760", "lng": "72.8777"},
+    "delhi": {"lat": "28.7041", "lng": "77.1025"},
+    "pune": {"lat": "18.5204", "lng": "73.8567"}
+}
+BASE_URL = "https://www.swiggy.com/dapi/restaurants/list/v5"
+MENU_URL = "https://www.swiggy.com/dapi/menu/pl"
 
-# Output files
-restaurants_file = "restaurants.csv"
-menus_file = "menus.csv"
+TODAY = datetime.date.today().strftime("%Y-%m-%d")
 
-# Write CSV headers
-with open(restaurants_file, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow(["restaurant_id", "name", "city", "cuisines", "avg_cost_for_two", "rating", "delivery_time", "veg"])
+# CSV Files
+RESTAURANTS_FILE = "restaurants.csv"
+MENUS_FILE = "menus.csv"
+REVIEWS_FILE = "reviews.csv"
+SNAPSHOT_FILE = "daily_snapshot.csv"
 
-with open(menus_file, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow(["menu_id", "restaurant_id", "item_name", "category", "price", "veg"])
+# -----------------------------
+# CSV Setup (create headers once)
+# -----------------------------
+if not os.path.exists(RESTAURANTS_FILE):
+    with open(RESTAURANTS_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["restaurant_id", "name", "city", "area", "cuisines", "avg_cost_for_two",
+                         "rating", "delivery_time", "delivery_fee", "is_pure_veg"])
 
-# Swiggy API endpoint (hidden but accessible from network calls)
-SWIGGY_API = "https://www.swiggy.com/dapi/restaurants/list/v5"
+if not os.path.exists(MENUS_FILE):
+    with open(MENUS_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["menu_id", "restaurant_id", "item_name", "category", "price", "is_veg", "available"])
 
-def scrape_city(city):
+if not os.path.exists(REVIEWS_FILE):
+    with open(REVIEWS_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["review_id", "restaurant_id", "user_name", "rating", "comment", "date"])
+
+if not os.path.exists(SNAPSHOT_FILE):
+    with open(SNAPSHOT_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["record_date", "restaurant_id", "rating", "delivery_time", "delivery_fee", "item_name", "price"])
+
+# -----------------------------
+# Scraper Functions
+# -----------------------------
+def scrape_city(city, lat, lng):
     offset = 0
-    restaurant_count = 0
-
     while True:
         params = {
-            "lat": "19.0760",  # default coords, change per city
-            "lng": "72.8777",
+            "lat": lat,
+            "lng": lng,
             "offset": offset,
             "sortBy": "RELEVANCE",
             "page_type": "DESKTOP_WEB_LISTING"
         }
         headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(SWIGGY_API, params=params, headers=headers)
-
+        r = requests.get(BASE_URL, params=params, headers=headers)
         if r.status_code != 200:
-            print(f"Failed for {city}, offset {offset}")
             break
 
         data = r.json()
-        restaurants = data.get("data", {}).get("cards", [])
-        if not restaurants:
+        cards = data.get("data", {}).get("cards", [])
+        if not cards:
             break
 
-        for card in restaurants:
+        for card in cards:
             info = card.get("data", {}).get("data", {})
             if not info:
                 continue
 
             rest_id = info.get("id")
             name = info.get("name")
-            cuisines = ", ".join(info.get("cuisines", []))
+            area = info.get("area")
+            cuisines = "|".join(info.get("cuisines", []))
             avg_cost = info.get("costForTwoString")
             rating = info.get("avgRating")
-            delivery = info.get("deliveryTime")
+            delivery_time = info.get("deliveryTime")
+            delivery_fee = info.get("feeDetails", {}).get("totalFee", 0)
             veg = info.get("veg", False)
 
-            with open(restaurants_file, "a", newline="", encoding="utf-8") as f:
+            # Save restaurant row
+            with open(RESTAURANTS_FILE, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow([rest_id, name, city, cuisines, avg_cost, rating, delivery, veg])
+                writer.writerow([rest_id, name, city, area, cuisines, avg_cost, rating, delivery_time, delivery_fee, veg])
 
-            restaurant_count += 1
+            # Scrape menu for this restaurant
+            scrape_menu(rest_id)
 
         offset += 20
-        time.sleep(1)  # be polite
+        time.sleep(1)  # polite delay
 
-    print(f"✅ Scraped {restaurant_count} restaurants for {city}")
+def scrape_menu(rest_id):
+    params = {"page-type": "REGULAR_MENU", "complete-menu": "true", "lat": "19.0760", "lng": "72.8777", "restaurantId": rest_id}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(MENU_URL, params=params, headers=headers)
+    if r.status_code != 200:
+        return
 
+    data = r.json()
+    menu_items = data.get("data", {}).get("menu", {}).get("items", {})
+    if not menu_items:
+        return
+
+    for item_id, item in menu_items.items():
+        name = item.get("name")
+        category = item.get("category")
+        price = item.get("price", 0) / 100  # prices in paise
+        is_veg = item.get("isVeg", 0) == 1
+        available = not item.get("inStock", 0) == 0
+
+        # Save menus.csv
+        with open(MENUS_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([item_id, rest_id, name, category, price, is_veg, available])
+
+        # Save daily_snapshot.csv
+        with open(SNAPSHOT_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([TODAY, rest_id, None, None, None, name, price])
+
+    # 🔹 Reviews endpoint (some restaurants may expose)
+    reviews = data.get("data", {}).get("reviews", [])
+    for idx, rev in enumerate(reviews):
+        with open(REVIEWS_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                f"{rest_id}_{idx}", rest_id,
+                rev.get("userName"), rev.get("rating"),
+                rev.get("comment"), rev.get("time")
+            ])
+
+# -----------------------------
 # Run scraper
-for city in cities:
-    scrape_city(city)
+# -----------------------------
+for city, coords in CITIES.items():
+    print(f"📍 Scraping {city}...")
+    scrape_city(city, coords["lat"], coords["lng"])
+    print(f"✅ Done {city}")
