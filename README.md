@@ -1,179 +1,90 @@
 import requests
-import csv
+from bs4 import BeautifulSoup
+import pandas as pd
 import time
-import datetime
-import os
-import urllib3
 
-# Disable SSL warnings if verify=False
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+BASE_URL = "https://www.swiggy.com"
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-CITIES = {
-    "mumbai": {"lat": "19.0760", "lng": "72.8777"},
-    "delhi": {"lat": "28.7041", "lng": "77.1025"},
-    "pune": {"lat": "18.5204", "lng": "73.8567"}
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/115.0 Safari/537.36"
 }
 
-BASE_URL = "https://www.swiggy.com/dapi/restaurants/list/v5"
-MENU_URL = "https://www.swiggy.com/dapi/menu/pl"
+def scrape_city(city="mumbai", max_restaurants=10):
+    url = f"{BASE_URL}/city/{city}"
+    print(f"🔎 Scraping city: {city} → {url}")
 
-TODAY = datetime.date.today().strftime("%Y-%m-%d")
+    response = requests.get(url, headers=headers, timeout=15, verify=False)
+    if response.status_code != 200:
+        print(f"❌ Failed to load {url}, status: {response.status_code}")
+        return
 
-# CSV Files
-RESTAURANTS_FILE = "restaurants.csv"
-MENUS_FILE = "menus.csv"
-REVIEWS_FILE = "reviews.csv"
-SNAPSHOT_FILE = "daily_snapshot.csv"
+    soup = BeautifulSoup(response.text, "html.parser")
+    cards = soup.find_all("div", {"class": "_1HEuF"})
 
-# -----------------------------
-# Safe GET wrapper (handles SSL + errors)
-# -----------------------------
-def safe_get(url, params=None, headers=None):
+    restaurants, menus = [], []
+    count = 0
+
+    for card in cards:
+        try:
+            name = card.find("div", {"class": "nA6kb"}).text.strip()
+            cuisines = card.find("div", {"class": "_1gURR"}).text.strip()
+            rating = card.find("div", {"class": "_9uwBC"}).text.strip() if card.find("div", {"class": "_9uwBC"}) else "NA"
+            rest_id = card.find("a")["href"].split("/")[-1]
+
+            restaurants.append({
+                "rest_id": rest_id,
+                "name": name,
+                "cuisines": cuisines,
+                "rating": rating,
+                "city": city
+            })
+
+            print(f"✅ Restaurant: {name} ({rest_id})")
+
+            # scrape menu for this restaurant
+            menu_url = f"{BASE_URL}{card.find('a')['href']}"
+            menus.extend(scrape_menu(rest_id, menu_url))
+
+            count += 1
+            if count >= max_restaurants:
+                break
+
+            time.sleep(1)  # politeness delay
+        except Exception as e:
+            print(f"⚠️ Error parsing restaurant: {e}")
+
+    pd.DataFrame(restaurants).to_csv("restaurants.csv", index=False)
+    pd.DataFrame(menus).to_csv("menus.csv", index=False)
+
+    print(f"\n🎉 Done! Saved {len(restaurants)} restaurants and {len(menus)} menu items.")
+
+def scrape_menu(rest_id, url):
     try:
-        r = requests.get(url, params=params, headers=headers, timeout=15, verify=False)
-        if r.status_code == 200:
-            return r
-        else:
-            print(f"⚠️ HTTP {r.status_code} for {url}")
-            return None
-    except requests.exceptions.SSLError:
-        print("❌ SSL Error – try using certifi or different network")
-        return None
+        resp = requests.get(url, headers=headers, timeout=15, verify=False)
+        if resp.status_code != 200:
+            print(f"   ❌ Failed menu for {rest_id}")
+            return []
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        items = soup.find_all("div", {"class": "styles_itemName__hLfgz"})
+        prices = soup.find_all("span", {"class": "rupee"})
+
+        menu_data = []
+        for item, price in zip(items, prices):
+            menu_data.append({
+                "rest_id": rest_id,
+                "item_name": item.text.strip(),
+                "price": price.text.strip().replace("₹", "")
+            })
+
+        print(f"   → Scraped {len(menu_data)} items for {rest_id}")
+        return menu_data
     except Exception as e:
-        print("❌ Request failed:", e)
-        return None
+        print(f"   ⚠️ Error scraping menu for {rest_id}: {e}")
+        return []
 
-# -----------------------------
-# CSV Setup (create headers once)
-# -----------------------------
-def init_csv():
-    if not os.path.exists(RESTAURANTS_FILE):
-        with open(RESTAURANTS_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["restaurant_id", "name", "city", "area", "cuisines",
-                             "avg_cost_for_two", "rating", "delivery_time",
-                             "delivery_fee", "is_pure_veg"])
 
-    if not os.path.exists(MENUS_FILE):
-        with open(MENUS_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["menu_id", "restaurant_id", "item_name", "category", "price", "is_veg", "available"])
-
-    if not os.path.exists(REVIEWS_FILE):
-        with open(REVIEWS_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["review_id", "restaurant_id", "user_name", "rating", "comment", "date"])
-
-    if not os.path.exists(SNAPSHOT_FILE):
-        with open(SNAPSHOT_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["record_date", "restaurant_id", "rating", "delivery_time", "delivery_fee", "item_name", "price"])
-
-# -----------------------------
-# Scraper Functions
-# -----------------------------
-def scrape_city(city, lat, lng):
-    offset = 0
-    while True:
-        params = {
-            "lat": lat,
-            "lng": lng,
-            "offset": offset,
-            "sortBy": "RELEVANCE",
-            "page_type": "DESKTOP_WEB_LISTING"
-        }
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = safe_get(BASE_URL, params=params, headers=headers)
-        if not r:
-            break
-
-        data = r.json()
-        cards = data.get("data", {}).get("cards", [])
-        if not cards:
-            break
-
-        for card in cards:
-            info = card.get("data", {}).get("data", {})
-            if not info:
-                continue
-
-            rest_id = info.get("id")
-            name = info.get("name")
-            area = info.get("area")
-            cuisines = "|".join(info.get("cuisines", []))
-            avg_cost = info.get("costForTwoString")
-            rating = info.get("avgRating")
-            delivery_time = info.get("deliveryTime")
-            delivery_fee = info.get("feeDetails", {}).get("totalFee", 0)
-            veg = info.get("veg", False)
-
-            # Save restaurant row
-            with open(RESTAURANTS_FILE, "a", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow([rest_id, name, city, area, cuisines, avg_cost,
-                                 rating, delivery_time, delivery_fee, veg])
-
-            # Scrape menu for this restaurant
-            scrape_menu(rest_id)
-
-        offset += 20
-        time.sleep(1)  # polite delay
-
-def scrape_menu(rest_id):
-    params = {
-        "page-type": "REGULAR_MENU",
-        "complete-menu": "true",
-        "lat": "19.0760",
-        "lng": "72.8777",
-        "restaurantId": rest_id
-    }
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = safe_get(MENU_URL, params=params, headers=headers)
-    if not r:
-        return
-
-    data = r.json()
-    menu_items = data.get("data", {}).get("menu", {}).get("items", {})
-    if not menu_items:
-        return
-
-    for item_id, item in menu_items.items():
-        name = item.get("name")
-        category = item.get("category")
-        price = item.get("price", 0) / 100  # prices in paise
-        is_veg = item.get("isVeg", 0) == 1
-        available = not item.get("inStock", 0) == 0
-
-        # Save menus.csv
-        with open(MENUS_FILE, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([item_id, rest_id, name, category, price, is_veg, available])
-
-        # Save daily_snapshot.csv
-        with open(SNAPSHOT_FILE, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([TODAY, rest_id, None, None, None, name, price])
-
-    # 🔹 Reviews endpoint (optional, may not always be available)
-    reviews = data.get("data", {}).get("reviews", [])
-    for idx, rev in enumerate(reviews):
-        with open(REVIEWS_FILE, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                f"{rest_id}_{idx}", rest_id,
-                rev.get("userName"), rev.get("rating"),
-                rev.get("comment"), rev.get("time")
-            ])
-
-# -----------------------------
-# MAIN
-# -----------------------------
 if __name__ == "__main__":
-    init_csv()
-    for city, coords in CITIES.items():
-        print(f"📍 Scraping {city}...")
-        scrape_city(city, coords["lat"], coords["lng"])
-        print(f"✅ Done {city}")
+    scrape_city("mumbai", max_restaurants=10)
