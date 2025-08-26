@@ -1,46 +1,38 @@
 import praw
-import csv
-import os
+import ssl
+import certifi
+import prawcore
 
-# === Authenticate (replace with your own Reddit app credentials) ===
-reddit = praw.Reddit(
-    client_id="YOUR_CLIENT_ID",
-    client_secret="YOUR_CLIENT_SECRET",
-    user_agent="reddit_scraper"
-)
+def create_reddit_instance(use_certifi=False):
+    if use_certifi:
+        print("⚡ Retrying with certifi certificates...")
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        # Force prawcore/requests to use certifi
+        prawcore.session.HTTPSession._default_kwargs["verify"] = certifi.where()
+    
+    return praw.Reddit(
+        client_id="YOUR_CLIENT_ID",
+        client_secret="YOUR_CLIENT_SECRET",
+        user_agent="reddit_scraper_test"
+    )
 
-# === Setup folders ===
-os.makedirs("reddit_data/posts", exist_ok=True)
-os.makedirs("reddit_data/comments", exist_ok=True)
+def test_reddit_connection():
+    try:
+        reddit = create_reddit_instance()
+        # Try fetching 5 posts from r/python
+        for post in reddit.subreddit("python").hot(limit=5):
+            print(f"✅ {post.title} (score: {post.score})")
+        print("🎉 Connection successful without certifi fix.")
+    except Exception as e:
+        print("❌ First attempt failed:", e)
+        # Retry with certifi
+        try:
+            reddit = create_reddit_instance(use_certifi=True)
+            for post in reddit.subreddit("python").hot(limit=5):
+                print(f"✅ {post.title} (score: {post.score})")
+            print("🎉 Connection successful with certifi fix.")
+        except Exception as e2:
+            print("🚨 Still failed:", e2)
 
-def scrape_subreddit(subreddit_name, post_limit=100):
-    subreddit = reddit.subreddit(subreddit_name)
-
-    # === Collect Posts ===
-    post_file = f"reddit_data/posts/{subreddit_name}_posts.csv"
-    with open(post_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["id", "title", "score", "author", "created_utc", "url", "num_comments"])
-        for post in subreddit.hot(limit=post_limit):
-            writer.writerow([post.id, post.title, post.score,
-                             str(post.author), post.created_utc, post.url, post.num_comments])
-
-    # === Collect Comments ===
-    comment_file = f"reddit_data/comments/{subreddit_name}_comments.csv"
-    with open(comment_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["post_id", "comment_id", "author", "score", "created_utc", "body"])
-        
-        for post in subreddit.hot(limit=post_limit):
-            post.comments.replace_more(limit=0)  # flatten "MoreComments"
-            for comment in post.comments.list():
-                writer.writerow([post.id, comment.id, str(comment.author),
-                                 comment.score, comment.created_utc, comment.body])
-
-    print(f"✅ Finished scraping r/{subreddit_name} → {post_file}, {comment_file}")
-
-# === Example Usage ===
-subreddits_to_scrape = ["python", "learnprogramming", "datascience"]
-
-for sub in subreddits_to_scrape:
-    scrape_subreddit(sub, post_limit=200)  # collect 200 posts per subreddit
+if __name__ == "__main__":
+    test_reddit_connection()
