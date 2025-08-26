@@ -1,63 +1,21 @@
-import os
-import csv
 import praw
+import ssl
 
-# --- Reddit API Authentication ---
+# Disable SSL verification globally
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# Initialize PRAW
 reddit = praw.Reddit(
     client_id="YOUR_CLIENT_ID",
     client_secret="YOUR_CLIENT_SECRET",
-    user_agent="reddit_scraper_test"
+    user_agent="datacrawl"
 )
 
-# --- Create output folders ---
-os.makedirs("reddit_data/posts", exist_ok=True)
-os.makedirs("reddit_data/comments", exist_ok=True)
+# Example: scrape top posts from r/Python
+subreddit = reddit.subreddit("Python")
 
-def scrape_subreddit(subreddit_name, post_limit=50):
-    """Scrape posts + comments from a subreddit into CSV files"""
-
-    subreddit = reddit.subreddit(subreddit_name)
-
-    # --- Save Posts ---
-    post_file = f"reddit_data/posts/{subreddit_name}_posts.csv"
-    with open(post_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["id", "title", "score", "author", "created_utc", "url", "num_comments"])
-        for post in subreddit.hot(limit=post_limit):
-            writer.writerow([
-                post.id,
-                post.title,
-                post.score,
-                str(post.author),
-                post.created_utc,
-                post.url,
-                post.num_comments
-            ])
-
-    # --- Save Comments ---
-    comment_file = f"reddit_data/comments/{subreddit_name}_comments.csv"
-    with open(comment_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["post_id", "comment_id", "author", "score", "created_utc", "body"])
-        for post in subreddit.hot(limit=post_limit):
-            post.comments.replace_more(limit=0)  # remove "MoreComments"
-            for comment in post.comments.list():
-                writer.writerow([
-                    post.id,
-                    comment.id,
-                    str(comment.author),
-                    comment.score,
-                    comment.created_utc,
-                    comment.body.replace("\n", " ")
-                ])
-
-    print(f"✅ Finished scraping r/{subreddit_name}")
-    print(f"   Posts → {post_file}")
-    print(f"   Comments → {comment_file}")
-
-
-if __name__ == "__main__":
-    subreddits_to_scrape = ["python", "learnprogramming"]
-
-    for sub in subreddits_to_scrape:
-        scrape_subreddit(sub, post_limit=50)
+for post in subreddit.top(limit=10):
+    print(f"Title: {post.title}")
+    print(f"Score: {post.score}")
+    print(f"URL: {post.url}")
+    print("-" * 50)
