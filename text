@@ -1,56 +1,50 @@
-CREATE OR REPLACE VIEW vw_stock_daily_summary AS
-SELECT 
-    d.trade_date,
-    c.company_name,
-    ROUND(AVG(f.close_price), 2) AS avg_close_price
-FROM fact_stock_prices f
-JOIN dim_date d ON f.date_id = d.date_id
-JOIN dim_company c ON f.company_id = c.company_id
-GROUP BY d.trade_date, c.company_name
-ORDER BY d.trade_date, c.company_name;
+import pandas as pd
 
-CREATE OR REPLACE VIEW vw_stock_avg_volume AS
-SELECT 
-    d.trade_date,
-    c.company_name,
-    ROUND(AVG(f.trade_volume), 2) AS avg_trade_volume
-FROM fact_stock_prices f
-JOIN dim_date d ON f.date_id = d.date_id
-JOIN dim_company c ON f.company_id = c.company_id
-GROUP BY d.trade_date, c.company_name
-ORDER BY d.trade_date, c.company_name;
+# Load dataset
+df = pd.read_csv("owid-co2-data.csv")
 
-CREATE OR REPLACE VIEW vw_stock_monthly_trend AS
-SELECT 
-    d.year,
-    d.month,
-    c.company_name,
-    ROUND(AVG(f.close_price), 2) AS monthly_avg_close
-FROM fact_stock_prices f
-JOIN dim_date d ON f.date_id = d.date_id
-JOIN dim_company c ON f.company_id = c.company_id
-GROUP BY d.year, d.month, c.company_name
-ORDER BY d.year, d.month, c.company_name;
+# 🔹 Step 1: Keep only relevant columns
+useful_cols = [
+    "country", "year", "co2", "co2_per_capita", "co2_growth_prct",
+    "coal_co2", "oil_co2", "gas_co2", "cement_co2", "flaring_co2",
+    "land_use_change_co2", "total_ghg", "methane", "nitrous_oxide",
+    "population", "gdp"
+]
+df = df[[col for col in useful_cols if col in df.columns]].copy()
 
-CREATE OR REPLACE VIEW vw_stock_top5_high AS
-SELECT 
-    d.trade_date,
-    c.company_name,
-    MAX(f.close_price) AS highest_close
-FROM fact_stock_prices f
-JOIN dim_date d ON f.date_id = d.date_id
-JOIN dim_company c ON f.company_id = c.company_id
-GROUP BY d.trade_date, c.company_name
-ORDER BY highest_close DESC
-LIMIT 5;
+# 🔹 Step 2: Remove aggregate regions
+exclude = ["World", "Africa", "Asia", "Europe", "North America", 
+           "South America", "Oceania", "European Union (27)"]
+df = df[~df["country"].isin(exclude)]
 
-CREATE OR REPLACE VIEW vw_stock_volatility AS
-SELECT 
-    d.trade_date,
-    c.company_name,
-    ROUND(AVG(f.volatility_7d), 4) AS avg_volatility
-FROM fact_stock_prices f
-JOIN dim_date d ON f.date_id = d.date_id
-JOIN dim_company c ON f.company_id = c.company_id
-GROUP BY d.trade_date, c.company_name
-ORDER BY d.trade_date, c.company_name;
+# 🔹 Step 3: Keep only recent years (example: 1990–2024)
+df = df[df["year"] >= 1990]
+
+# 🔹 Step 4: Fill missing CO₂-related values with 0
+co2_cols = ["co2","co2_per_capita","co2_growth_prct","coal_co2","oil_co2",
+            "gas_co2","cement_co2","flaring_co2","land_use_change_co2",
+            "total_ghg","methane","nitrous_oxide"]
+
+for col in co2_cols:
+    if col in df.columns:
+        df[col] = df[col].fillna(0)
+
+# 🔹 Step 5: Fill population & GDP via forward/backward fill
+df["population"] = df.groupby("country")["population"].ffill().bfill()
+df["gdp"] = df.groupby("country")["gdp"].ffill().bfill()
+
+# 🔹 Step 6: Ensure numeric types
+for col in df.columns:
+    if col not in ["country", "year"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+# 🔹 Step 7: Sort data
+df = df.sort_values(by=["country", "year"]).reset_index(drop=True)
+
+# 🔹 Step 8: Add derived metrics
+df["co2_per_gdp"] = df["co2"] / df["gdp"]
+df["co2_per_person"] = df["co2"] / df["population"]
+
+# Final check
+print(df["year"].min(), "to", df["year"].max())  # confirm range
+df.head()
